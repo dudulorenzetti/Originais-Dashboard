@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Originais Lumine</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo-mark" aria-hidden="true">
+          <span class="logo-l">L</span>
+          <span class="logo-point"></span>
+        </div>
+        <div>
+          <strong>ORIGINAIS</strong>
+          <small>LUMINE</small>
+        </div>
+      </div>
+
+      <nav class="side-nav">
+        <button class="nav-btn active" data-tab="dashboard">Dashboard</button>
+        <button class="nav-btn" data-tab="cronograma">Cronograma</button>
+        <button class="nav-btn" data-tab="projetos">Projetos</button>
+        <button class="nav-btn" data-tab="configuracoes">Configurações</button>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <section id="dashboard" class="tab active">
+        <header class="view-header">
+          <div>
+            <h1>Dashboard</h1>
+            <p>Visão geral das suas produções</p>
+          </div>
+        </header>
+
+        <div class="dashboard-top-controls">
+          <div class="year-inline">
+            <strong>ANO:</strong>
+            <div id="yearChips" class="chips"></div>
+          </div>
+          <button id="dashboardFiltersToggle" class="btn light">Filtros <span class="filter-arrow">▾</span></button>
+        </div>
+
+        <section id="dashboardFiltersPanel" class="dashboard-filters" hidden>
+          <div class="filter-row">
+            <strong>Categoria:</strong>
+            <div id="dashboardCategoryChips" class="chips"></div>
+          </div>
+          <div class="filter-row">
+            <strong>Formato:</strong>
+            <div id="dashboardFormatChips" class="chips"></div>
+          </div>
+          <div class="filter-row">
+            <strong>Natureza:</strong>
+            <div id="dashboardNatureChips" class="chips"></div>
+          </div>
+          <div class="filter-row">
+            <strong>Duração:</strong>
+            <div id="dashboardDurationChips" class="chips"></div>
+          </div>
+        </section>
+
+        <div id="summaryCards" class="summary-cards"></div>
+
+        <div class="dashboard-grid">
+          <article class="panel wide">
+            <h3>Produções por Ano</h3>
+            <div id="chartByYear" class="chart-bars"></div>
+          </article>
+
+          <article class="panel wide">
+            <h3>Tempo Médio por Etapa (meses)</h3>
+            <div id="chartAvgStage" class="chart-bars horizontal"></div>
+          </article>
+
+          <article class="panel">
+            <h3>Por Status</h3>
+            <div id="chartByStatus" class="chart-bars"></div>
+          </article>
+
+          <article class="panel">
+            <h3>Por Categoria</h3>
+            <div id="chartByCategory" class="chart-bars"></div>
+          </article>
+
+          <article class="panel">
+            <h3>Por Formato</h3>
+            <div id="chartByFormat" class="chart-bars"></div>
+          </article>
+
+          <article class="panel">
+            <h3>Por Natureza</h3>
+            <div id="chartByNature" class="chart-bars"></div>
+          </article>
+
+          <article class="panel">
+            <h3>Por Duração</h3>
+            <div id="chartByDuration" class="chart-bars"></div>
+          </article>
+
+        </div>
+      </section>
+
+      <section id="cronograma" class="tab">
+        <header class="view-header">
+          <div>
+            <h1>Cronograma</h1>
+            <p>Visão de Gantt das produções</p>
+          </div>
+        </header>
+
+        <div class="dashboard-top-controls">
+          <div class="year-inline">
+            <strong>ANO:</strong>
+            <div id="timelineYears" class="chips"></div>
+          </div>
+          <div class="header-actions">
+            <button id="btnFilterGantt" class="btn light">Filtros <span class="filter-arrow">▾</span></button>
+          </div>
+        </div>
+
+        <section id="ganttFiltersPanel" class="dashboard-filters" hidden>
+          <div class="filter-row">
+            <strong>Categoria:</strong>
+            <div id="ganttCategoryChips" class="chips"></div>
+          </div>
+          <div class="filter-row">
+            <strong>Formato:</strong>
+            <div id="ganttFormatChips" class="chips"></div>
+          </div>
+          <div class="filter-row">
+            <strong>Natureza:</strong>
+            <div id="ganttNatureChips" class="chips"></div>
+          </div>
+          <div class="filter-row">
+            <strong>Duração:</strong>
+            <div id="ganttDurationChips" class="chips"></div>
+          </div>
+        </section>
+
+        <div class="timeline-toolbar">
+          <div class="timeline-zoom-left">
+            <button id="timelineBack" class="btn light timeline-btn-square" title="Aumentar quantidade de meses">-</button>
+            <button id="timelineForward" class="btn light timeline-btn-square" title="Diminuir quantidade de meses">+</button>
+          </div>
+          <div class="timeline-center-nav">
+            <button id="timelineLeft" class="btn light timeline-btn-square" title="Mover timeline para esquerda">‹</button>
+            <div class="timeline-range-label" id="timelineRangeLabel"></div>
+            <button id="timelineRight" class="btn light timeline-btn-square" title="Mover timeline para direita">›</button>
+          </div>
+          <div class="timeline-controls-right">
+            <button id="btnQuickNewProject" class="btn accent">+ Novo Projeto</button>
+          </div>
+        </div>
+
+        <div class="timeline-hidden-inputs" hidden>
+          <input type="month" id="timelineStart" />
+          <input type="month" id="timelineEnd" />
+          <button id="applyTimeline" class="btn light">Aplicar</button>
+        </div>
+
+        <div id="ganttContainer" class="gantt-container"></div>
+      </section>
+
+      <section id="projetos" class="tab">
+        <header class="view-header">
+          <div>
+            <h1>Projetos</h1>
+            <p>Gerencie suas produções audiovisuais</p>
+          </div>
+          <div class="header-actions">
+            <button id="btnImportCsv" class="btn light">Importar CSV</button>
+            <input id="csvInput" type="file" accept=".csv" multiple hidden />
+            <button id="btnNewProject" class="btn accent">+ Novo Projeto</button>
+          </div>
+        </header>
+
+        <div class="dashboard-top-controls">
+          <div class="year-inline">
+            <strong>ANO:</strong>
+            <div id="projectYears" class="chips"></div>
+          </div>
+          <div class="header-actions">
+            <button id="btnFilterProjects" class="btn light">Filtros <span class="filter-arrow">▾</span></button>
+          </div>
+        </div>
+
+        <section id="projectFiltersPanel" class="dashboard-filters" hidden>
+          <div class="filter-row">
+            <strong>Categoria:</strong>
+            <div id="projectCategoryChips" class="chips"></div>
+          </div>
+          <div class="filter-row">
+            <strong>Formato:</strong>
+            <div id="projectFormatChips" class="chips"></div>
+          </div>
+          <div class="filter-row">
+            <strong>Natureza:</strong>
+            <div id="projectNatureChips" class="chips"></div>
+          </div>
+          <div class="filter-row">
+            <strong>Duração:</strong>
+            <div id="projectDurationChips" class="chips"></div>
+          </div>
+        </section>
+
+        <div class="table-tools">
+          <input id="projectSearch" placeholder="Buscar por nome ou SKU..." />
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>SKU</th>
+                <th>Título</th>
+                <th>Categoria</th>
+                <th>Formato</th>
+                <th>Natureza</th>
+                <th>Gasto</th>
+                <th>Data de Lançamento</th>
+                <th>Status</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+            <tbody id="projectsTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="configuracoes" class="tab">
+        <header class="view-header">
+          <div>
+            <h1>Configurações</h1>
+            <p>Gerencie categorias, formatos, status e etapas</p>
+          </div>
+        </header>
+
+        <div id="configTabs" class="chips tabs-like"></div>
+        <article class="panel">
+          <div class="panel-head">
+            <h3 id="configTitle"></h3>
+            <button id="btnAddConfig" class="btn accent">+ Adicionar</button>
+          </div>
+          <ul id="configList" class="config-list"></ul>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="projectDialog">
+    <form id="projectForm" method="dialog">
+      <h2 id="dialogTitle">Novo Projeto</h2>
+      <input type="hidden" id="projectId" />
+
+      <div class="form-grid">
+        <label>SKU <input id="projectCode" required /></label>
+        <label>Título <input id="projectTitle" required /></label>
+        <label>Categoria <select id="projectCategory"></select></label>
+        <label>Formato <select id="projectFormat"></select></label>
+        <label>Natureza <select id="projectNature"></select></label>
+        <label>Duração <select id="projectDuration"></select></label>
+        <label>Status <select id="projectStatus"></select></label>
+        <label>Gasto (R$) <input id="projectBudget" type="number" min="0" step="0.01" /></label>
+        <label>Data de Lançamento <input id="projectReleaseDate" type="text" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" /></label>
+      </div>
+
+      <label>Observações
+        <textarea id="projectNotes" rows="3" placeholder="Informações da produção..."></textarea>
+      </label>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Etapas</h3>
+          <button id="btnAddStage" type="button" class="btn light">+ Etapa</button>
+        </div>
+        <div id="projectStages"></div>
+      </div>
+
+      <menu class="dialog-actions">
+        <button id="btnDeleteProject" type="button" class="btn danger">Excluir</button>
+        <button id="btnCancelDialog" type="button" class="btn light">Cancelar</button>
+        <button class="btn accent" type="submit">Salvar</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="configItemDialog">
+    <form id="configItemForm" method="dialog">
+      <h3 id="configItemDialogTitle">Editar Item</h3>
+      <input type="hidden" id="configItemKey" />
+      <input type="hidden" id="configItemId" />
+      <label>Nome
+        <input id="configItemName" required />
+      </label>
+      <label id="configItemColorWrap">Cor
+        <input id="configItemColor" class="config-color-input" type="color" />
+      </label>
+      <menu class="dialog-actions">
+        <button id="configItemCancelBtn" type="button" class="btn light">Cancelar</button>
+        <button type="submit" class="btn accent">Salvar</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <template id="stageRowTpl">
+    <div class="stage-row">
+      <label>Etapa
+        <select data-field="stageId"></select>
+      </label>
+      <label>Início
+        <input data-field="start" type="month" />
+      </label>
+      <label>Fim
+        <input data-field="end" type="month" />
+      </label>
+      <button data-remove type="button" class="btn danger">Excluir</button>
+    </div>
+  </template>
+
+  <dialog id="stageDialog">
+    <form id="stageForm" method="dialog">
+      <h3 id="stageDialogTitle">Nova Etapa</h3>
+      <input type="hidden" id="stageProjectId" />
+      <input type="hidden" id="stageId" />
+      <div class="form-grid">
+        <label>Projeto
+          <input id="stageProjectLabel" disabled />
+        </label>
+        <label>Etapa
+          <select id="stageTypeSelect"></select>
+        </label>
+        <label>Início
+          <input type="month" id="stageStart" required />
+        </label>
+        <label>Fim
+          <input type="month" id="stageEnd" required />
+        </label>
+      </div>
+      <label>Observações
+        <textarea id="stageNotes" rows="3"></textarea>
+      </label>
+      <menu class="dialog-actions">
+        <button type="button" id="stageDeleteBtn" class="btn danger">Excluir</button>
+        <button type="button" id="stageCancelBtn" class="btn light">Cancelar</button>
+        <button type="submit" class="btn accent">Salvar Etapa</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="seed-data.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
