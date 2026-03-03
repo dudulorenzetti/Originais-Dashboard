@@ -9,6 +9,7 @@ const STORAGE_FALLBACK_KEYS = [
 const WINDOW_STORE_PREFIX = "__originais_store__:";
 const memoryStore = new Map();
 let storageEngines = null;
+let hasShownStorageWarning = false;
 
 const CONFIG_META = {
   stages: "ETAPA",
@@ -2014,7 +2015,7 @@ function resolveStorageEngines() {
 
 function encodeWindowStore(data) {
   try {
-    return WINDOW_STORE_PREFIX + btoa(unescape(encodeURIComponent(JSON.stringify(data))));
+    return WINDOW_STORE_PREFIX + JSON.stringify(data);
   } catch {
     return "";
   }
@@ -2023,9 +2024,17 @@ function encodeWindowStore(data) {
 function decodeWindowStore(raw) {
   try {
     if (!String(raw || "").startsWith(WINDOW_STORE_PREFIX)) return {};
-    const encoded = String(raw).slice(WINDOW_STORE_PREFIX.length);
-    const json = decodeURIComponent(escape(atob(encoded)));
-    const parsed = JSON.parse(json);
+    const payload = String(raw).slice(WINDOW_STORE_PREFIX.length);
+    let parsed = null;
+
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      // Compatibilidade com formato antigo em base64
+      const json = decodeURIComponent(escape(atob(payload)));
+      parsed = JSON.parse(json);
+    }
+
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -2065,18 +2074,28 @@ function writePersistedValue(key, value) {
 }
 
 function readPersistedValue(key) {
-  const fromWindow = readWindowStore()[key];
-  if (fromWindow !== null && fromWindow !== undefined) return fromWindow;
+  return readPersistedCandidates(key)[0] ?? null;
+}
 
+function readPersistedCandidates(key) {
+  const out = [];
+  const seen = new Set();
+  const push = (value) => {
+    if (value === null || value === undefined) return;
+    const raw = String(value);
+    if (seen.has(raw)) return;
+    seen.add(raw);
+    out.push(raw);
+  };
+
+  push(readWindowStore()[key]);
   for (const engine of resolveStorageEngines()) {
     try {
-      const value = engine.getItem(key);
-      if (value !== null && value !== undefined) return value;
+      push(engine.getItem(key));
     } catch {}
   }
-
-  if (memoryStore.has(key)) return memoryStore.get(key);
-  return null;
+  if (memoryStore.has(key)) push(memoryStore.get(key));
+  return out;
 }
 
 function nextCode() {
@@ -2113,10 +2132,18 @@ function saveState() {
   const serialized = JSON.stringify(state);
   if (!writePersistedValue(STORAGE_KEY, serialized)) {
     console.warn("[Originais] Falha ao persistir estado principal.");
+    if (!hasShownStorageWarning) {
+      hasShownStorageWarning = true;
+      alert("O navegador bloqueou a gravação local de dados. Verifique permissões de armazenamento/site data no Chrome.");
+    }
   }
   try {
     if (!writePersistedValue(PROJECTS_BACKUP_KEY, JSON.stringify(state.projects || []))) {
       console.warn("[Originais] Falha ao persistir backup de projetos.");
+      if (!hasShownStorageWarning) {
+        hasShownStorageWarning = true;
+        alert("O navegador bloqueou a gravação local de dados. Verifique permissões de armazenamento/site data no Chrome.");
+      }
     }
   } catch (error) {
     console.warn("[Originais] Falha ao salvar backup de projetos.", error);
@@ -2153,29 +2180,39 @@ function loadState() {
 }
 
 function loadStateFromKey(key) {
-  try {
-    const raw = readPersistedValue(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    const merged = maybeRecoverProjectsFromBackup(mergeState(parsed));
-    if (!Array.isArray(merged?.projects)) return null;
-    return merged;
-  } catch (error) {
-    console.warn(`[Originais] Falha ao carregar localStorage '${key}'.`, error);
-    return null;
-  }
+  const raws = readPersistedCandidates(key);
+  if (!raws.length) return null;
+
+  let best = null;
+  raws.forEach((raw) => {
+    try {
+      const parsed = JSON.parse(raw);
+      const merged = maybeRecoverProjectsFromBackup(mergeState(parsed));
+      if (!Array.isArray(merged?.projects)) return;
+      if (!best || merged.projects.length > best.projects.length) best = merged;
+    } catch (error) {
+      console.warn(`[Originais] Falha ao carregar localStorage '${key}'.`, error);
+    }
+  });
+
+  return best;
 }
 
 function readProjectsBackup() {
-  try {
-    const raw = readPersistedValue(PROJECTS_BACKUP_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item) => item && typeof item === "object");
-  } catch {
-    return [];
-  }
+  const raws = readPersistedCandidates(PROJECTS_BACKUP_KEY);
+  if (!raws.length) return [];
+  let best = [];
+
+  raws.forEach((raw) => {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      const cleaned = parsed.filter((item) => item && typeof item === "object");
+      if (cleaned.length > best.length) best = cleaned;
+    } catch {}
+  });
+
+  return best;
 }
 
 function looksLikeSeedProjects(projects = []) {
