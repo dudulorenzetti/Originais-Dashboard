@@ -1,10 +1,5 @@
-window.__ORIGINAIS_SUPABASE__ = window.__ORIGINAIS_SUPABASE__ || {
-  // Preencha com os dados do projeto Supabase para habilitar sync compartilhado.
-  // Exemplo:
-  // url: "https://bmyvxmpdricoecwzeesq.supabase.co",
-  // anonKey: "sb_publishable_Ars_zsHgFnRwNnt-HIcOdA_c-hlhIaU",
-  // stateId: "originais-main"
-  url: "",
-  anonKey: "",
+window.__ORIGINAIS_SUPABASE__ = {
+  url: "https://bmyvxmpdricoecwzeesq.supabase.co",
+  anonKey: "SUA_CHAVE_PUBLICA_AQUI", // publishable ou anon
   stateId: "originais-main"
 };
