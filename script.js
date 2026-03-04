@@ -112,8 +112,6 @@ let queuedSupabaseStateRaw = "";
 let hasShownSupabaseWarning = false;
 let hasShownSupabaseConfigWarning = false;
 
-init();
-
 async function init() {
   state = loadState();
   const beforeHydrate = JSON.stringify(state);
@@ -3803,3 +3801,5 @@ function projectSeed(code, title, year, category, format, nature, duration, stat
 function stageSeed(stageId, start, end) {
   return { id: uid(), stageId, start, end };
 }
+
+init();
