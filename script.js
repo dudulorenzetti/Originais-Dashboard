@@ -1,5 +1,10 @@
 const STORAGE_KEY = "originais_lumine_state_v2";
+const SESSION_USER_KEY = `${STORAGE_KEY}_session_user`;
 const PROJECTS_BACKUP_KEY = `${STORAGE_KEY}_projects_backup`;
+const IDB_NAME = "originais_lumine_db";
+const IDB_STORE = "kv";
+const IDB_STATE_KEY = "app_state";
+const IDB_PROJECTS_KEY = "projects_backup";
 const STORAGE_FALLBACK_KEYS = [
   `${STORAGE_KEY}_backup`,
   "originais_lumine_state_v1",
@@ -29,7 +34,7 @@ const CONFIG_SINGULAR_META = {
   statuses: "Status"
 };
 
-const COLOR_CONFIG_KEYS = new Set(["categories", "formats", "natures", "statuses"]);
+const COLOR_CONFIG_KEYS = new Set(["categories", "formats", "natures", "durations", "statuses"]);
 
 const STATUS_COLORS = {
   Backlog: "gray",
@@ -52,7 +57,11 @@ const BASE44_FILES = [
   "StageType_export.csv"
 ];
 
-let state = loadState();
+const DEFAULT_ADMIN_EMAIL = "eduardo.lorenzetti@lumine.tv";
+const LEGACY_ADMIN_EMAIL = "admin@originais.com";
+const DEFAULT_ADMIN_PASSWORD = "admin123";
+
+let state = seedState();
 let currentTab = "dashboard";
 let selectedDashboardYears = new Set();
 let dashboardFiltersOpen = false;
@@ -60,7 +69,8 @@ let selectedDashboardFilters = {
   categories: new Set(),
   formats: new Set(),
   natures: new Set(),
-  durations: new Set()
+  durations: new Set(),
+  projects: new Set()
 };
 let selectedGanttYears = new Set();
 let ganttFiltersOpen = false;
@@ -68,7 +78,8 @@ let selectedGanttFilters = {
   categories: new Set(),
   formats: new Set(),
   natures: new Set(),
-  durations: new Set()
+  durations: new Set(),
+  projects: new Set()
 };
 let selectedProjectYears = new Set();
 let projectFiltersOpen = false;
@@ -76,20 +87,37 @@ let selectedProjectFilters = {
   categories: new Set(),
   formats: new Set(),
   natures: new Set(),
-  durations: new Set()
+  durations: new Set(),
+  projects: new Set()
+};
+const projectFilterQueries = {
+  dashboard: "",
+  gantt: "",
+  projects: ""
 };
 let selectedConfigKey = "stages";
 let selectedStageRef = null;
 let draggingStage = null;
+let draggingRelease = null;
 let suppressLineClickUntil = 0;
+let currentUserId = "";
 
 init();
 
-function init() {
+async function init() {
+  state = loadState();
+  const beforeHydrateCount = Array.isArray(state?.projects) ? state.projects.length : 0;
+  state = await hydrateStateFromIndexedDb(state);
+  if ((Array.isArray(state?.projects) ? state.projects.length : 0) !== beforeHydrateCount) saveState();
+  ensureAdminAccount();
+  applyPtBrLocaleToDateInputs(document);
   bindNavigation();
   bindGlobalActions();
   bindDialog();
+  bindAuthActions();
+  restoreSessionUser();
   renderAll();
+  applyAuthVisibility();
 }
 
 function bindNavigation() {
@@ -103,6 +131,10 @@ function bindNavigation() {
 }
 
 function openTab(tab) {
+  if (!isAuthenticated()) {
+    applyAuthVisibility();
+    return;
+  }
   currentTab = tab;
   document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
   document.getElementById(tab).classList.add("active");
@@ -135,6 +167,8 @@ function bindGlobalActions() {
   document.getElementById("timelineRight").addEventListener("click", () => panTimeline(1));
 
   document.getElementById("projectSearch").addEventListener("input", renderProjectsTable);
+  document.getElementById("btnCreateUser").addEventListener("click", () => openUserDialog());
+  document.getElementById("btnInviteUser").addEventListener("click", () => openInviteDialog());
 
   document.getElementById("btnImportCsv").addEventListener("click", () => {
     document.getElementById("csvInput").click();
@@ -158,6 +192,186 @@ function bindGlobalActions() {
   });
 }
 
+function bindAuthActions() {
+  const loginForm = document.getElementById("loginForm");
+  const forgotPasswordBtn = document.getElementById("forgotPasswordBtn");
+  const profileMenuBtn = document.getElementById("profileMenuBtn");
+  const profileMenu = document.getElementById("profileMenu");
+  const profileMenuList = document.getElementById("profileMenuList");
+
+  loginForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const email = String(document.getElementById("loginEmail").value || "").trim().toLowerCase();
+    const password = document.getElementById("loginPassword").value;
+    const user = authenticateUser(email, password);
+    if (!user) {
+      showLoginError("E-mail ou senha inválidos.");
+      return;
+    }
+
+    currentUserId = user.id;
+    persistSessionUser();
+    clearLoginError();
+    loginForm.reset();
+    openTab("dashboard");
+    applyAuthVisibility();
+    renderAll();
+  });
+
+  forgotPasswordBtn.addEventListener("click", () => {
+    const email = prompt("Informe o e-mail cadastrado:");
+    if (!email) return;
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const user = state.users.find((item) => String(item.email || "").toLowerCase() === normalizedEmail);
+    if (!user) {
+      alert("E-mail não encontrado.");
+      return;
+    }
+    const pass1 = prompt("Digite a nova senha (mínimo 6 caracteres):");
+    if (!pass1) return;
+    if (String(pass1).length < 6) {
+      alert("A senha deve ter no mínimo 6 caracteres.");
+      return;
+    }
+    const pass2 = prompt("Confirme a nova senha:");
+    if (pass1 !== pass2) {
+      alert("A confirmação da senha não confere.");
+      return;
+    }
+    user.passwordHash = hashPassword(pass1);
+    saveState();
+    alert("Senha atualizada com sucesso.");
+  });
+
+  profileMenuBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    profileMenuList.hidden = !profileMenuList.hidden;
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!profileMenu.contains(event.target)) profileMenuList.hidden = true;
+  });
+
+  document.getElementById("profileViewEditBtn").addEventListener("click", () => {
+    profileMenuList.hidden = true;
+    if (!currentUserId) return;
+    openUserDialog(currentUserId);
+  });
+
+  document.getElementById("profileLogoutBtn").addEventListener("click", () => {
+    profileMenuList.hidden = true;
+    logoutCurrentUser();
+  });
+}
+
+function authenticateUser(email, password) {
+  if (!email || !password) return null;
+  const user = state.users.find((item) => String(item.email || "").toLowerCase() === email);
+  if (!user) return null;
+  const passwordHash = String(user.passwordHash || "").trim();
+  if (!passwordHash) {
+    if (String(user.email || "").toLowerCase() === DEFAULT_ADMIN_EMAIL && password === DEFAULT_ADMIN_PASSWORD) {
+      user.passwordHash = hashPassword(DEFAULT_ADMIN_PASSWORD);
+      saveState();
+      return user;
+    }
+    return null;
+  }
+  return passwordHash === hashPassword(password) ? user : null;
+}
+
+function getCurrentUser() {
+  if (!currentUserId) return null;
+  return state.users.find((user) => user.id === currentUserId) || null;
+}
+
+function isAuthenticated() {
+  return Boolean(getCurrentUser());
+}
+
+function persistSessionUser() {
+  try {
+    if (currentUserId) sessionStorage.setItem(SESSION_USER_KEY, currentUserId);
+    else sessionStorage.removeItem(SESSION_USER_KEY);
+  } catch (_) {}
+}
+
+function restoreSessionUser() {
+  try {
+    currentUserId = sessionStorage.getItem(SESSION_USER_KEY) || "";
+  } catch (_) {
+    currentUserId = "";
+  }
+  if (currentUserId && !state.users.some((user) => user.id === currentUserId)) currentUserId = "";
+  persistSessionUser();
+}
+
+function applyAuthVisibility() {
+  const loginView = document.getElementById("loginView");
+  const appShell = document.getElementById("appShell");
+  const profileMenuList = document.getElementById("profileMenuList");
+  const profileMenuUser = document.getElementById("profileMenuUser");
+  const user = getCurrentUser();
+
+  loginView.hidden = Boolean(user);
+  appShell.hidden = !user;
+  profileMenuList.hidden = true;
+  profileMenuUser.textContent = user ? `${user.name || "Usuário"} • ${user.role || "LEITOR"}` : "";
+}
+
+function logoutCurrentUser() {
+  currentUserId = "";
+  persistSessionUser();
+  const loginForm = document.getElementById("loginForm");
+  if (loginForm) loginForm.reset();
+  clearLoginError();
+  applyAuthVisibility();
+}
+
+function showLoginError(message) {
+  const error = document.getElementById("loginError");
+  error.textContent = message;
+  error.hidden = false;
+}
+
+function clearLoginError() {
+  const error = document.getElementById("loginError");
+  error.textContent = "";
+  error.hidden = true;
+}
+
+function ensureAdminAccount() {
+  if (!Array.isArray(state.users)) state.users = [];
+  const normalizedDefaultEmail = DEFAULT_ADMIN_EMAIL.toLowerCase();
+  const normalizedLegacyEmail = LEGACY_ADMIN_EMAIL.toLowerCase();
+
+  let admin = state.users.find((user) => String(user.email || "").trim().toLowerCase() === normalizedDefaultEmail);
+  const legacyAdmin = state.users.find((user) => String(user.email || "").trim().toLowerCase() === normalizedLegacyEmail);
+
+  if (!admin && legacyAdmin) {
+    legacyAdmin.email = DEFAULT_ADMIN_EMAIL;
+    admin = legacyAdmin;
+  }
+
+  if (!admin) {
+    admin = {
+      id: uid(),
+      name: "Administrador",
+      email: DEFAULT_ADMIN_EMAIL,
+      role: "ADMIN",
+      passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
+      invitedAt: new Date().toISOString().slice(0, 10)
+    };
+    state.users.push(admin);
+    saveState();
+    return;
+  }
+  if (!String(admin.passwordHash || "").trim()) {
+    admin.passwordHash = hashPassword(DEFAULT_ADMIN_PASSWORD);
+    saveState();
+  }
+}
+
 function bindDialog() {
   const dialog = document.getElementById("projectDialog");
   const form = document.getElementById("projectForm");
@@ -165,6 +379,16 @@ function bindDialog() {
   const stageForm = document.getElementById("stageForm");
   const configItemDialog = document.getElementById("configItemDialog");
   const configItemForm = document.getElementById("configItemForm");
+  const userDialog = document.getElementById("userDialog");
+  const userForm = document.getElementById("userForm");
+  const inviteDialog = document.getElementById("inviteDialog");
+  const inviteForm = document.getElementById("inviteForm");
+  const stageStartInput = document.getElementById("stageStart");
+  const stageEndInput = document.getElementById("stageEnd");
+  const projectReleaseDateTextInput = document.getElementById("projectReleaseDateText");
+  const projectReleaseDatePickerInput = document.getElementById("projectReleaseDatePicker");
+  const projectReleaseDateOpenBtn = document.getElementById("projectReleaseDateOpen");
+  const projectBudgetInput = document.getElementById("projectBudget");
 
   document.getElementById("btnCancelDialog").addEventListener("click", () => dialog.close());
 
@@ -180,6 +404,58 @@ function bindDialog() {
 
   document.getElementById("btnAddStage").addEventListener("click", () => {
     document.getElementById("projectStages").appendChild(buildStageRow());
+  });
+
+  const syncReleaseTextAndPicker = (rawValue, shouldAlert = false) => {
+    const raw = String(rawValue || "").trim();
+    if (!raw) {
+      projectReleaseDateTextInput.value = "";
+      projectReleaseDatePickerInput.value = "";
+      syncProjectYearFromReleaseDate();
+      return true;
+    }
+    const normalized = normalizeDateInput(raw);
+    if (!normalized) {
+      if (shouldAlert) alert("Lançamento inválido. Use o calendário ou o formato dd/mm/aaaa.");
+      syncProjectYearFromReleaseDate();
+      return false;
+    }
+    projectReleaseDateTextInput.value = formatDatePtBr(normalized);
+    projectReleaseDatePickerInput.value = normalized;
+    syncProjectYearFromReleaseDate();
+    return true;
+  };
+
+  projectReleaseDateTextInput.addEventListener("input", () => {
+    projectReleaseDateTextInput.value = maskDateTextPtBr(projectReleaseDateTextInput.value);
+    if (!String(projectReleaseDateTextInput.value || "").trim()) projectReleaseDatePickerInput.value = "";
+    syncProjectYearFromReleaseDate();
+  });
+  projectReleaseDateTextInput.addEventListener("change", () => {
+    syncReleaseTextAndPicker(projectReleaseDateTextInput.value, true);
+  });
+  projectReleaseDateTextInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    syncReleaseTextAndPicker(projectReleaseDateTextInput.value, true);
+  });
+  projectReleaseDatePickerInput.addEventListener("change", () => {
+    syncReleaseTextAndPicker(projectReleaseDatePickerInput.value, false);
+  });
+  projectReleaseDateOpenBtn.addEventListener("click", () => {
+    if (typeof projectReleaseDatePickerInput.showPicker === "function") projectReleaseDatePickerInput.showPicker();
+    else projectReleaseDatePickerInput.click();
+  });
+
+  [stageStartInput, stageEndInput].forEach((input) => {
+    if (!input) return;
+    input.addEventListener("input", updateStageDialogMonthLabels);
+    input.addEventListener("change", updateStageDialogMonthLabels);
+  });
+
+  projectBudgetInput.addEventListener("blur", () => {
+    const parsed = parseCurrencyInputBRL(projectBudgetInput.value);
+    projectBudgetInput.value = parsed === null ? "" : formatCurrencyInputBRL(parsed);
   });
 
   form.addEventListener("submit", (e) => {
@@ -245,15 +521,54 @@ function bindDialog() {
     saveConfigItemDialog();
     configItemDialog.close();
   });
+
+  document.getElementById("userCancelBtn").addEventListener("click", () => userDialog.close());
+  userForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const payload = collectUserForm();
+    if (!payload) return;
+
+    const idx = state.users.findIndex((user) => user.id === payload.id);
+    if (idx >= 0) state.users[idx] = { ...state.users[idx], ...payload, invitedAt: state.users[idx].invitedAt || payload.invitedAt };
+    else state.users.push(payload);
+
+    saveState();
+    userDialog.close();
+    renderUsers();
+    applyAuthVisibility();
+  });
+
+  document.getElementById("inviteCancelBtn").addEventListener("click", () => inviteDialog.close());
+  inviteForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const payload = collectInviteForm();
+    if (!payload) return;
+    const inviteLink = buildUserInviteLink(payload.email);
+    const existingIdx = state.users.findIndex((user) => String(user.email || "").toLowerCase() === payload.email);
+    if (existingIdx >= 0) {
+      state.users[existingIdx].invitedAt = new Date().toISOString().slice(0, 10);
+      saveState();
+      renderUsers();
+    }
+    inviteDialog.close();
+    window.location.href = inviteLink;
+  });
 }
 
 function renderAll() {
+  if (currentUserId && !state.users.some((user) => user.id === currentUserId)) {
+    currentUserId = "";
+    persistSessionUser();
+  }
   renderDashboard();
   renderGantt();
   renderProjectsTools();
   renderProjectsTable();
+  renderUsers();
   renderConfigTabs();
   renderConfigList();
+  applyPtBrLocaleToDateInputs(document);
+  applyAuthVisibility();
 }
 
 function renderDashboard() {
@@ -318,6 +633,7 @@ function filteredDashboardProjects() {
     if (!matchesMultiFilter(getProjectField(p, "format"), selectedDashboardFilters.formats)) return false;
     if (!matchesMultiFilter(getProjectField(p, "nature"), selectedDashboardFilters.natures)) return false;
     if (!matchesMultiFilter(getProjectField(p, "duration"), selectedDashboardFilters.durations)) return false;
+    if (!matchesProjectFilter(p.id, selectedDashboardFilters.projects)) return false;
     return true;
   });
 }
@@ -352,6 +668,7 @@ function renderDashboardExtraFilters() {
     selectedDashboardFilters.durations,
     "durations"
   );
+  renderProjectPickerFilter(document.getElementById("dashboardProjectFilter"), selectedDashboardFilters.projects, "dashboard", () => renderDashboard());
 }
 
 function renderDashboardFilterChips(container, values, selectedSet, key, onChange = renderDashboard) {
@@ -377,10 +694,138 @@ function renderDashboardFilterChips(container, values, selectedSet, key, onChang
   });
 }
 
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function renderProjectPickerFilter(container, selectedSet, scopeKey, onChange) {
+  if (!container) return;
+  const allProjects = sortedProjects(state.projects, "desc").map((project) => ({
+    id: project.id,
+    label: `${project.code || "Sem SKU"} ${project.title || "Sem título"}`.trim()
+  }));
+  const validIds = new Set(allProjects.map((project) => project.id));
+  [...selectedSet].forEach((id) => {
+    if (!validIds.has(id)) selectedSet.delete(id);
+  });
+  const query = String(projectFilterQueries[scopeKey] || "");
+  const selectedIds = [...selectedSet];
+  const selectedItems = selectedIds
+    .map((id) => allProjects.find((project) => project.id === id))
+    .filter(Boolean);
+
+  const getSuggestions = () => {
+    const q = normalizeSearchText(projectFilterQueries[scopeKey] || "");
+    if (!q) return [];
+    return allProjects
+      .filter((project) => !selectedSet.has(project.id))
+      .filter((project) => {
+        return normalizeSearchText(project.label).includes(q);
+      })
+      .slice(0, 10);
+  };
+
+  const renderSuggestionsHtml = () => {
+    const q = normalizeSearchText(projectFilterQueries[scopeKey] || "");
+    if (!q) return "";
+    const suggestions = getSuggestions();
+    if (!suggestions.length) return '<span class="project-picker-empty">Nenhum projeto encontrado.</span>';
+    return suggestions
+      .map((item) => `<button type="button" data-project-filter="add" data-id="${item.id}">${escapeHtml(item.label)}</button>`)
+      .join("");
+  };
+
+  const allActive = selectedSet.size === 0;
+  container.innerHTML = `<div class="project-picker">
+    <div class="project-picker-top">
+      <button class="chip ${allActive ? "active" : ""}" data-project-filter="all">Todos</button>
+      <div class="project-picker-input">
+        ${selectedItems
+          .map(
+            (item) =>
+              `<span class="project-token">${escapeHtml(item.label)}<button type="button" data-project-filter="remove" data-id="${item.id}" aria-label="Remover projeto">×</button></span>`
+          )
+          .join("")}
+        <input type="text" data-project-filter="query" placeholder="Buscar projeto..." value="${escapeHtml(query)}" />
+      </div>
+    </div>
+    <div class="project-picker-suggestions" data-project-filter="suggestions">${renderSuggestionsHtml()}</div>
+  </div>`;
+
+  const queryInput = container.querySelector("[data-project-filter='query']");
+  const suggestionsWrap = container.querySelector("[data-project-filter='suggestions']");
+  if (queryInput) {
+    const addProjectFromSuggestion = (candidate) => {
+      if (!candidate) return;
+      selectedSet.add(candidate.id);
+      projectFilterQueries[scopeKey] = "";
+      onChange();
+    };
+
+    const addFromQuery = () => {
+      if (!String(queryInput.value || "").trim()) return;
+      const first = getSuggestions()[0];
+      addProjectFromSuggestion(first);
+    };
+
+    const refreshSuggestions = () => {
+      if (!suggestionsWrap) return;
+      suggestionsWrap.innerHTML = renderSuggestionsHtml();
+    };
+
+    queryInput.addEventListener("input", () => {
+      projectFilterQueries[scopeKey] = queryInput.value;
+      refreshSuggestions();
+    });
+
+    queryInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === "," || event.key === ";") {
+        event.preventDefault();
+        addFromQuery();
+        return;
+      }
+      if (event.key !== "Backspace" || queryInput.value.trim()) return;
+      const last = selectedItems[selectedItems.length - 1];
+      if (!last) return;
+      selectedSet.delete(last.id);
+      onChange();
+    });
+
+    suggestionsWrap?.addEventListener("click", (event) => {
+      const btn = event.target.closest("button[data-project-filter='add']");
+      if (!btn) return;
+      const candidate = allProjects.find((project) => project.id === btn.dataset.id);
+      addProjectFromSuggestion(candidate);
+    });
+  }
+
+  container.querySelector("[data-project-filter='all']")?.addEventListener("click", () => {
+    selectedSet.clear();
+    projectFilterQueries[scopeKey] = "";
+    onChange();
+  });
+
+  container.querySelectorAll("[data-project-filter='remove']").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      selectedSet.delete(btn.dataset.id);
+      onChange();
+    });
+  });
+}
+
 function matchesMultiFilter(value, selectedSet) {
   if (!selectedSet || selectedSet.size === 0) return true;
   const normalized = String(value || "").trim();
   return normalized && selectedSet.has(normalized);
+}
+
+function matchesProjectFilter(projectId, selectedSet) {
+  if (!selectedSet || selectedSet.size === 0) return true;
+  return selectedSet.has(projectId);
 }
 
 function getProjectField(project, field) {
@@ -401,9 +846,16 @@ function getProjectField(project, field) {
 }
 
 function getProjectYear(project) {
-  const normalizedReleaseDate = inferReleaseDate(project);
-  if (!normalizedReleaseDate) return null;
-  return Number(normalizedReleaseDate.slice(0, 4));
+  const normalizedReleaseDate = normalizeDateInput(project?.releaseDate || project?.release_date || project?.dataDeLancamento || project?.data_de_lancamento || "");
+  if (normalizedReleaseDate) return Number(normalizedReleaseDate.slice(0, 4));
+  const fallbackYear = Number(project?.year || project?.ano);
+  if (Number.isInteger(fallbackYear) && fallbackYear > 0) return fallbackYear;
+  return null;
+}
+
+function getProjectYearLabel(project) {
+  const year = getProjectYear(project);
+  return year ? String(year) : "";
 }
 
 function renderGantt() {
@@ -433,7 +885,9 @@ function renderGantt() {
   let html = `<div class="gantt" style="min-width:${leftWidth + timelineWidth}px">`;
   html += `<div class="gantt-head" style="grid-template-columns:${leftWidth}px ${timelineWidth}px">`;
   html += '<div class="g-left">PROJETO</div>';
-  html += `<div class="g-months">${months.map((m) => `<div class="g-month">${monthLabel(m)}</div>`).join("")}</div>`;
+  html += `<div class="g-months">${months
+    .map((m, idx) => `<div class="g-month ${idx > 0 && String(m).endsWith("-01") ? "year-separator" : ""}">${monthLabel(m)}</div>`)
+    .join("")}</div>`;
   html += "</div>";
 
   list.forEach((project) => {
@@ -447,6 +901,11 @@ function renderGantt() {
     </div>`;
 
     html += `<div class="g-line" data-line-project="${project.id}">`;
+    months.forEach((m, idx) => {
+      if (idx > 0 && String(m).endsWith("-01")) {
+        html += `<div class="g-year-divider" style="left: calc(${idx} * var(--month-width));" aria-hidden="true"></div>`;
+      }
+    });
     project.stages.forEach((st) => {
       const start = monthToIndex(st.start) - monthToIndex(state.timeline.start);
       const end = monthToIndex(st.end) - monthToIndex(state.timeline.start);
@@ -467,11 +926,12 @@ function renderGantt() {
 
     const releaseMarker = getReleaseMarkerData(project.releaseDate, state.timeline.start, state.timeline.end);
     if (releaseMarker) {
-      html += `<div class="release-marker" style="left: calc(${releaseMarker.offsetMonths.toFixed(4)} * var(--month-width));" title="Lançamento: ${escapeHtml(
+      html += `<div class="release-stage-bar" style="left: calc(${releaseMarker.offsetMonths} * var(--month-width)); width: calc(1 * var(--month-width) - 2px);" data-release-project="${project.id}" title="Lançamento: ${escapeHtml(
         releaseMarker.label
       )}">
-        <span class="release-dot"></span>
-        <small>${escapeHtml(releaseMarker.short)}</small>
+        <span class="label">LAN</span>
+        <span class="stage-handle left"></span>
+        <span class="stage-handle right"></span>
       </div>`;
     }
     html += "</div></div>";
@@ -501,13 +961,25 @@ function renderGantt() {
     });
   });
 
+  container.querySelectorAll(".release-stage-bar").forEach((bar) => {
+    bar.addEventListener("dblclick", (event) => {
+      event.stopPropagation();
+      openReleaseDateEditor(bar.dataset.releaseProject);
+    });
+    bar.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      event.stopPropagation();
+      startReleaseDrag(event, bar);
+    });
+  });
+
   container.querySelectorAll(".g-line").forEach((line) => {
     const projectId = line.dataset.lineProject;
     line.addEventListener("mousemove", (event) => renderStageGhost(line, event));
     line.addEventListener("mouseleave", () => removeStageGhost(line));
     line.addEventListener("click", (event) => {
       if (Date.now() < suppressLineClickUntil) return;
-      if (event.target.closest(".stage-bar")) return;
+      if (event.target.closest(".stage-bar, .release-stage-bar")) return;
       const idx = monthIndexFromLinePointer(line, event);
       if (idx == null) return;
       const month = addMonths(state.timeline.start, idx);
@@ -581,6 +1053,7 @@ function renderGanttExtraFilters() {
     "durations",
     () => renderGantt()
   );
+  renderProjectPickerFilter(document.getElementById("ganttProjectFilter"), selectedGanttFilters.projects, "gantt", () => renderGantt());
 }
 
 function filteredGanttProjects() {
@@ -590,6 +1063,7 @@ function filteredGanttProjects() {
     if (!matchesMultiFilter(getProjectField(p, "format"), selectedGanttFilters.formats)) return false;
     if (!matchesMultiFilter(getProjectField(p, "nature"), selectedGanttFilters.natures)) return false;
     if (!matchesMultiFilter(getProjectField(p, "duration"), selectedGanttFilters.durations)) return false;
+    if (!matchesProjectFilter(p.id, selectedGanttFilters.projects)) return false;
     return true;
   });
 }
@@ -613,6 +1087,7 @@ function openStageDialog(projectId, stageId = null, forcedStart = null) {
   document.getElementById("stageEnd").value = stage?.end || forcedStart || state.timeline.start;
   document.getElementById("stageNotes").value = stage?.notes || "";
   document.getElementById("stageDeleteBtn").style.visibility = stage ? "visible" : "hidden";
+  updateStageDialogMonthLabels();
   dialog.showModal();
 }
 
@@ -667,6 +1142,97 @@ function onStageDragEnd() {
   draggingStage = null;
   saveState();
   renderDashboard();
+}
+
+function startReleaseDrag(event, bar) {
+  event.preventDefault();
+  const projectId = bar.dataset.releaseProject;
+  const project = state.projects.find((p) => p.id === projectId);
+  const normalizedReleaseDate = normalizeDateInput(project?.releaseDate || "");
+  if (!project || !normalizedReleaseDate) return;
+
+  const monthWidth = parseFloat(getComputedStyle(document.getElementById("ganttContainer")).getPropertyValue("--month-width")) || 46;
+  draggingRelease = {
+    projectId,
+    startX: event.clientX,
+    startMonth: monthToIndex(monthFromDate(normalizedReleaseDate)),
+    monthWidth,
+    moved: false,
+    baseDate: normalizedReleaseDate
+  };
+  document.addEventListener("mousemove", onReleaseDragMove);
+  document.addEventListener("mouseup", onReleaseDragEnd, { once: true });
+}
+
+function onReleaseDragMove(event) {
+  if (!draggingRelease) return;
+  const delta = Math.round((event.clientX - draggingRelease.startX) / draggingRelease.monthWidth);
+  const project = state.projects.find((p) => p.id === draggingRelease.projectId);
+  if (!project) return;
+
+  const nextMonth = indexToMonth(draggingRelease.startMonth + delta);
+  const nextDate = setReleaseDateMonth(draggingRelease.baseDate, nextMonth);
+  if (!nextDate || project.releaseDate === nextDate) return;
+  project.releaseDate = nextDate;
+  project.year = Number(nextDate.slice(0, 4));
+  if (delta !== 0) draggingRelease.moved = true;
+  renderGantt();
+}
+
+function onReleaseDragEnd() {
+  document.removeEventListener("mousemove", onReleaseDragMove);
+  const didMove = Boolean(draggingRelease?.moved);
+  draggingRelease = null;
+  if (!didMove) return;
+  suppressLineClickUntil = Date.now() + 250;
+  saveState();
+  renderProjectsTools();
+  renderProjectsTable();
+  renderDashboard();
+}
+
+function openReleaseDateEditor(projectId) {
+  const project = state.projects.find((p) => p.id === projectId);
+  if (!project) return;
+  const normalized = normalizeDateInput(project.releaseDate || "");
+  if (!normalized) return;
+
+  const picker = document.createElement("input");
+  picker.type = "date";
+  picker.lang = "pt-BR";
+  picker.value = normalized;
+  picker.style.position = "fixed";
+  picker.style.opacity = "0";
+  picker.style.pointerEvents = "none";
+  picker.style.width = "1px";
+  picker.style.height = "1px";
+  document.body.appendChild(picker);
+
+  const cleanup = () => picker.remove();
+  picker.addEventListener(
+    "change",
+    () => {
+      const next = normalizeDateInput(picker.value);
+      if (next) {
+        project.releaseDate = next;
+        project.year = Number(next.slice(0, 4));
+        saveState();
+        renderAll();
+      }
+      cleanup();
+    },
+    { once: true }
+  );
+  picker.addEventListener(
+    "blur",
+    () => {
+      setTimeout(cleanup, 0);
+    },
+    { once: true }
+  );
+
+  if (typeof picker.showPicker === "function") picker.showPicker();
+  else picker.click();
 }
 
 function monthIndexFromLinePointer(line, event) {
@@ -792,6 +1358,10 @@ function renderProjectsTools() {
       renderProjectsTable();
     }
   );
+  renderProjectPickerFilter(document.getElementById("projectProjectFilter"), selectedProjectFilters.projects, "projects", () => {
+    renderProjectsTools();
+    renderProjectsTable();
+  });
 }
 
 function renderProjectsTable() {
@@ -805,31 +1375,57 @@ function renderProjectsTable() {
     if (!matchesMultiFilter(getProjectField(p, "format"), selectedProjectFilters.formats)) return false;
     if (!matchesMultiFilter(getProjectField(p, "nature"), selectedProjectFilters.natures)) return false;
     if (!matchesMultiFilter(getProjectField(p, "duration"), selectedProjectFilters.durations)) return false;
+    if (!matchesProjectFilter(p.id, selectedProjectFilters.projects)) return false;
     return true;
   });
 
   const body = document.getElementById("projectsTableBody");
   if (!projects.length) {
-    body.innerHTML = '<tr><td colspan="9" class="empty">Nenhum projeto encontrado.</td></tr>';
+    body.innerHTML = '<tr><td colspan="10" class="empty">Nenhum projeto encontrado.</td></tr>';
     return;
   }
 
   const categories = uniq(state.settings.categories).filter(Boolean);
   const formats = uniq(state.settings.formats).filter(Boolean);
   const natures = uniq(state.settings.natures).filter(Boolean);
+  const durations = uniq(state.settings.durations).filter(Boolean);
   const statuses = uniq(state.settings.statuses).filter(Boolean);
 
   body.innerHTML = projects
     .map((p) => {
       const badgeClass = STATUS_COLORS[p.status] || "gray";
+      const yearLabel = getProjectYearLabel(p);
+      const budgetValue = hasNumericValue(p.budget) ? Number(p.budget) : hasNumericValue(p.spent) ? Number(p.spent) : null;
+      const releaseDateIso = normalizeDateInput(p.releaseDate || "");
+      const releaseDateLabel = releaseDateIso ? formatDatePtBr(releaseDateIso) : "";
       return `<tr>
         <td><button class="btn light cell-link-edit" data-action="edit" data-id="${p.id}">${escapeHtml(p.code || "")}</button></td>
-        <td><button class="btn light cell-link-edit" data-action="edit" data-id="${p.id}">${escapeHtml(p.title || "")}</button></td>
+        <td>
+          <button class="btn light cell-link-edit project-title-link" data-action="edit" data-id="${p.id}">
+            <span class="project-title-main">${escapeHtml(p.title || "")}</span>
+            ${yearLabel ? `<span class="project-title-meta-year">${escapeHtml(yearLabel)}</span>` : ""}
+          </button>
+        </td>
         <td>${inlineSelect("category", p.id, getProjectField(p, "category"), categories)}</td>
         <td>${inlineSelect("format", p.id, getProjectField(p, "format"), formats)}</td>
         <td>${inlineSelect("nature", p.id, getProjectField(p, "nature"), natures)}</td>
-        <td><input class="cell-inline-input" data-action="inline-budget" data-id="${p.id}" type="number" min="0" step="0.01" value="${p.budget ?? p.spent ?? ""}" placeholder="R$" /></td>
-        <td><input class="cell-inline-input" data-action="inline-release-date" data-id="${p.id}" type="text" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" value="${formatDatePtBr(p.releaseDate || "")}" /></td>
+        <td>${inlineSelect("duration", p.id, getProjectField(p, "duration"), durations)}</td>
+        <td><input class="cell-inline-input" data-action="inline-budget" data-id="${p.id}" type="text" inputmode="decimal" value="${escapeHtml(
+          formatCurrencyInputBRL(budgetValue)
+        )}" placeholder="R$ 0,00" /></td>
+        <td>
+          <div class="release-inline-wrap">
+            <input class="cell-inline-input release-inline-text${releaseDateIso ? " is-filled" : ""}" data-action="inline-release-date-text" data-id="${p.id}" type="text" inputmode="numeric" placeholder="dd/mm/aaaa" value="${escapeHtml(
+              releaseDateLabel
+            )}" />
+            <button type="button" class="btn light release-inline-btn" data-action="inline-release-date-open" title="Selecionar data" aria-label="Selecionar data">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h2v2h6V2h2v2h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3V2zm13 8H4v8h16v-8zM4 8h16V6H4v2z"/></svg>
+            </button>
+            <input class="release-inline-picker" data-action="inline-release-date-picker" data-id="${p.id}" type="date" lang="pt-BR" value="${escapeHtml(
+              releaseDateIso
+            )}" />
+          </div>
+        </td>
         <td>${inlineSelect("status", p.id, getProjectField(p, "status"), statuses, badgeClass)}</td>
         <td>
           <button class="btn light icon-btn" data-action="edit" data-id="${p.id}" title="Editar projeto" aria-label="Editar projeto">
@@ -855,6 +1451,7 @@ function renderProjectsTable() {
       if (field === "category") project.category = el.value;
       if (field === "format") project.format = el.value;
       if (field === "nature") project.nature = el.value;
+      if (field === "duration") project.duration = el.value;
       if (field === "status") project.status = el.value;
       saveState();
       renderProjectsTable();
@@ -867,32 +1464,72 @@ function renderProjectsTable() {
     el.addEventListener("change", () => {
       const project = state.projects.find((p) => p.id === el.dataset.id);
       if (!project) return;
-      const value = el.value.trim();
-      project.budget = value === "" ? null : Number(value);
+      const raw = String(el.value || "").trim();
+      const parsed = parseCurrencyInputBRL(raw);
+      if (raw && parsed === null) {
+        alert("Valor de gasto inválido.");
+        renderProjectsTable();
+        return;
+      }
+      project.budget = parsed;
       saveState();
       renderProjectsTable();
       renderDashboard();
     });
   });
 
-  body.querySelectorAll("input[data-action='inline-release-date']").forEach((el) => {
-    el.addEventListener("change", () => {
-      const project = state.projects.find((p) => p.id === el.dataset.id);
+  const commitReleaseDate = (projectId, rawValue) => {
+      const project = state.projects.find((p) => p.id === projectId);
       if (!project) return;
-      const raw = String(el.value || "").trim();
+      const raw = String(rawValue || "").trim();
       const normalized = normalizeDateInput(raw);
       if (raw && !normalized) {
-        alert("Data inválida. Use o formato dd/mm/aaaa.");
+        alert("Lançamento inválido. Use o calendário ou o formato dd/mm/aaaa.");
         renderProjectsTable();
         return;
       }
-      project.releaseDate = normalized;
-      project.year = normalized ? Number(normalized.slice(0, 4)) : null;
+      project.releaseDate = normalized || "";
+      if (normalized) project.year = Number(normalized.slice(0, 4));
       saveState();
       renderProjectsTable();
       renderGantt();
       renderDashboard();
       renderProjectsTools();
+  };
+
+  body.querySelectorAll("input[data-action='inline-release-date-text']").forEach((el) => {
+    el.addEventListener("input", () => {
+      el.value = maskDateTextPtBr(el.value);
+      el.classList.toggle("is-filled", Boolean(String(el.value || "").trim()));
+      if (!String(el.value || "").trim()) commitReleaseDate(el.dataset.id, "");
+    });
+    el.addEventListener("change", () => {
+      commitReleaseDate(el.dataset.id, el.value);
+    });
+    el.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      commitReleaseDate(el.dataset.id, el.value);
+      el.blur();
+    });
+    el.addEventListener("blur", () => {
+      commitReleaseDate(el.dataset.id, el.value);
+    });
+  });
+
+  body.querySelectorAll("input[data-action='inline-release-date-picker']").forEach((picker) => {
+    picker.addEventListener("change", () => {
+      commitReleaseDate(picker.dataset.id, picker.value);
+    });
+  });
+
+  body.querySelectorAll("button[data-action='inline-release-date-open']").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const wrap = btn.closest(".release-inline-wrap");
+      const picker = wrap?.querySelector("input[data-action='inline-release-date-picker']");
+      if (!picker) return;
+      if (typeof picker.showPicker === "function") picker.showPicker();
+      else picker.click();
     });
   });
 
@@ -904,6 +1541,134 @@ function renderProjectsTable() {
       renderAll();
     });
   });
+}
+
+function renderUsers() {
+  const body = document.getElementById("usersTableBody");
+  if (!body) return;
+
+  const users = [...(state.users || [])].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR"));
+  if (!users.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">Nenhum usuário cadastrado.</td></tr>';
+    return;
+  }
+
+  body.innerHTML = users
+    .map((user) => {
+      const invitedAt = user.invitedAt ? formatDatePtBr(user.invitedAt) : "";
+      const inviteText = invitedAt ? `Convidado em ${invitedAt}` : "Sem convite";
+      const passwordState = user.passwordHash ? "Definida" : "Pendente";
+      return `<tr>
+        <td>${escapeHtml(user.name || "")}</td>
+        <td>${escapeHtml(user.email || "")}</td>
+        <td><span class="badge blue">${escapeHtml(user.role || "LEITOR")}</span></td>
+        <td>${escapeHtml(passwordState)}</td>
+        <td>${escapeHtml(inviteText)}</td>
+        <td>
+          <button class="btn light icon-btn" data-user-action="edit" data-id="${user.id}" title="Editar usuário" aria-label="Editar usuário">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25zm2.92 2.33H5v-.92l9.06-9.06.92.92L5.92 19.58zM20.71 7.04a1 1 0 0 0 0-1.41L18.37 3.3a1 1 0 0 0-1.41 0l-1.54 1.54 3.75 3.75 1.54-1.55z"/></svg>
+          </button>
+          <button class="btn danger icon-btn" data-user-action="del" data-id="${user.id}" title="Excluir usuário" aria-label="Excluir usuário">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9zm-1 12h12a2 2 0 0 0 2-2V8H4v11a2 2 0 0 0 2 2z"/></svg>
+          </button>
+        </td>
+      </tr>`;
+    })
+    .join("");
+
+  body.querySelectorAll("button[data-user-action='edit']").forEach((btn) => {
+    btn.addEventListener("click", () => openUserDialog(btn.dataset.id));
+  });
+
+  body.querySelectorAll("button[data-user-action='del']").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (!confirm("Excluir usuário?")) return;
+      state.users = state.users.filter((user) => user.id !== btn.dataset.id);
+      saveState();
+      renderAll();
+    });
+  });
+}
+
+function openUserDialog(userId = null) {
+  const dialog = document.getElementById("userDialog");
+  const user = state.users.find((item) => item.id === userId);
+  document.getElementById("userDialogTitle").textContent = user ? "Editar Usuário" : "Cadastrar Usuário";
+  document.getElementById("userId").value = user?.id || uid();
+  document.getElementById("userName").value = user?.name || "";
+  document.getElementById("userEmail").value = user?.email || "";
+  document.getElementById("userRole").value = user?.role || "LEITOR";
+  document.getElementById("userPassword").value = "";
+  document.getElementById("userPasswordConfirm").value = "";
+  document.getElementById("userPasswordHint").hidden = !user;
+  dialog.showModal();
+}
+
+function collectUserForm() {
+  const id = document.getElementById("userId").value;
+  const existing = state.users.find((user) => user.id === id);
+  const name = document.getElementById("userName").value.trim();
+  const email = document.getElementById("userEmail").value.trim().toLowerCase();
+  const role = document.getElementById("userRole").value;
+  const password = document.getElementById("userPassword").value;
+  const passwordConfirm = document.getElementById("userPasswordConfirm").value;
+  if (!name || !email) {
+    alert("Preencha nome e e-mail.");
+    return null;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    alert("E-mail inválido.");
+    return null;
+  }
+  if (state.users.some((user) => user.id !== id && String(user.email || "").toLowerCase() === email)) {
+    alert("Já existe um usuário com esse e-mail.");
+    return null;
+  }
+  if ((!existing || !existing.passwordHash) && !password) {
+    alert("Defina uma senha para o usuário.");
+    return null;
+  }
+  if ((password || passwordConfirm) && password !== passwordConfirm) {
+    alert("A confirmação da senha não confere.");
+    return null;
+  }
+  if (password && password.length < 6) {
+    alert("A senha deve ter no mínimo 6 caracteres.");
+    return null;
+  }
+  return {
+    id,
+    name,
+    email,
+    role: ["ADMIN", "EDITOR", "LEITOR"].includes(role) ? role : "LEITOR",
+    passwordHash: password ? hashPassword(password) : String(existing?.passwordHash || ""),
+    invitedAt: existing?.invitedAt || new Date().toISOString().slice(0, 10)
+  };
+}
+
+function openInviteDialog() {
+  document.getElementById("inviteEmail").value = "";
+  document.getElementById("inviteDialog").showModal();
+}
+
+function collectInviteForm() {
+  const email = document.getElementById("inviteEmail").value.trim().toLowerCase();
+  if (!email) {
+    alert("Preencha o e-mail.");
+    return null;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    alert("E-mail inválido.");
+    return null;
+  }
+  return { email };
+}
+
+function buildUserInviteLink(email) {
+  const subject = encodeURIComponent("Convite de acesso - Originais Lumine");
+  const platformLink = getPlatformLink();
+  const body = encodeURIComponent(`Você foi convidado para o sistema Originais Lumine.\n\nAcesse a plataforma: ${platformLink}`);
+  return `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`;
 }
 
 function openProjectDialog(projectId = null) {
@@ -922,9 +1687,15 @@ function openProjectDialog(projectId = null) {
   document.getElementById("projectId").value = project?.id || uid();
   document.getElementById("projectCode").value = project?.code || nextCode();
   document.getElementById("projectTitle").value = project?.title || "";
-  document.getElementById("projectBudget").value = project?.budget ?? "";
-  document.getElementById("projectReleaseDate").value = formatDatePtBr(project?.releaseDate || "");
+  document.getElementById("projectYear").value = project?.year || "";
+  document.getElementById("projectBudget").value = formatCurrencyInputBRL(
+    hasNumericValue(project?.budget) ? Number(project.budget) : hasNumericValue(project?.spent) ? Number(project.spent) : null
+  );
+  const releaseDate = normalizeDateInput(project?.releaseDate || "");
+  document.getElementById("projectReleaseDateText").value = releaseDate ? formatDatePtBr(releaseDate) : "";
+  document.getElementById("projectReleaseDatePicker").value = releaseDate;
   document.getElementById("projectNotes").value = project?.notes || "";
+  syncProjectYearFromReleaseDate();
 
   const stageWrap = document.getElementById("projectStages");
   stageWrap.innerHTML = "";
@@ -947,10 +1718,22 @@ function collectProjectForm() {
   const projectId = document.getElementById("projectId").value;
   const existingProject = state.projects.find((project) => project.id === projectId);
   const rawBudget = document.getElementById("projectBudget").value.trim();
-  const rawReleaseDate = document.getElementById("projectReleaseDate").value.trim();
+  const rawYear = document.getElementById("projectYear").value.trim();
+  const rawReleaseDate = (document.getElementById("projectReleaseDateText").value || document.getElementById("projectReleaseDatePicker").value || "").trim();
   const normalizedReleaseDate = normalizeDateInput(rawReleaseDate);
+  const parsedBudget = parseCurrencyInputBRL(rawBudget);
+  const parsedYear = rawYear === "" ? null : Number(rawYear);
+
   if (rawReleaseDate && !normalizedReleaseDate) {
-    alert("Data de lançamento inválida. Use o formato dd/mm/aaaa.");
+    alert("Lançamento inválido. Use o calendário ou o formato dd/mm/aaaa.");
+    return null;
+  }
+  if (rawBudget && parsedBudget === null) {
+    alert("Gasto inválido. Use um valor numérico.");
+    return null;
+  }
+  if (rawYear && (!Number.isInteger(parsedYear) || parsedYear < 1900 || parsedYear > 2100)) {
+    alert("Ano inválido.");
     return null;
   }
   const stages = [...document.querySelectorAll("#projectStages .stage-row")]
@@ -972,16 +1755,16 @@ function collectProjectForm() {
     id: projectId,
     code: document.getElementById("projectCode").value.trim(),
     title: document.getElementById("projectTitle").value.trim(),
-    year: normalizedReleaseDate ? Number(normalizedReleaseDate.slice(0, 4)) : null,
+    year: normalizedReleaseDate ? Number(normalizedReleaseDate.slice(0, 4)) : parsedYear,
     category: document.getElementById("projectCategory").value,
     productionType: existingProject?.productionType || "",
     format: document.getElementById("projectFormat").value,
     nature: document.getElementById("projectNature").value,
     duration: document.getElementById("projectDuration").value,
     status: document.getElementById("projectStatus").value,
-    budget: rawBudget === "" ? null : Number(rawBudget),
+    budget: parsedBudget,
     releaseDate: normalizedReleaseDate,
-    spent: null,
+    spent: existingProject?.spent ?? null,
     notes: document.getElementById("projectNotes").value.trim(),
     stages
   };
@@ -999,6 +1782,12 @@ function buildStageRow(stage = null) {
 
   row.querySelector('[data-field="start"]').value = stage?.start || state.timeline.start;
   row.querySelector('[data-field="end"]').value = stage?.end || addMonths(state.timeline.start, 1);
+  row.querySelectorAll('input[type="month"]').forEach((input) => {
+    input.setAttribute("lang", "pt-BR");
+    input.addEventListener("input", () => updateStageRowMonthLabels(row));
+    input.addEventListener("change", () => updateStageRowMonthLabels(row));
+  });
+  updateStageRowMonthLabels(row);
 
   row.querySelector("[data-remove]").addEventListener("click", () => row.remove());
   return row;
@@ -1327,26 +2116,26 @@ function importSimpleProjectCsv(text) {
 
   const imported = rows
     .filter((row) => row.titulo || row.title)
-    .map((row) => ({
-      id: uid(),
-      code: row.codigo || row.code || nextCode(),
-      title: row.titulo || row.title,
-      year: row.ano || row.year ? Number(row.ano || row.year) : null,
-      category: row.categoria || state.settings.categories[0],
-      productionType: row.production_type || row.tipo || state.settings.productionTypes[0] || "",
-      format: row.formato || state.settings.formats[0],
-      nature: row.natureza || state.settings.natures[0],
-      duration: row.duracao || state.settings.durations[0],
-      status: row.status || "",
-      budget: row.gasto || row.budget ? Number(row.gasto || row.budget) : null,
-      releaseDate: inferReleaseDate({
-        releaseDate: row.data_de_lancamento || row.data_lancamento || row.release_date || row.release_date_at || "",
-        year: row.ano || row.year || ""
-      }),
-      spent: row.spent ? Number(row.spent) : null,
-      notes: row.notas || "",
-      stages: []
-    }));
+    .map((row) => {
+      const rawYear = row.ano || row.year || "";
+      return {
+        id: uid(),
+        code: row.codigo || row.code || nextCode(),
+        title: row.titulo || row.title,
+        year: rawYear ? Number(rawYear) : null,
+        category: row.categoria || state.settings.categories[0],
+        productionType: row.production_type || row.tipo || state.settings.productionTypes[0] || "",
+        format: row.formato || state.settings.formats[0],
+        nature: row.natureza || state.settings.natures[0],
+        duration: row.duracao || state.settings.durations[0],
+        status: row.status || "",
+        budget: parseCurrencyInputBRL(row.gasto || row.budget || ""),
+        releaseDate: releaseDateFromRawOrYear(row.data_de_lancamento || row.data_lancamento || row.release_date || row.release_date_at || "", rawYear),
+        spent: parseCurrencyInputBRL(row.spent || ""),
+        notes: row.notas || "",
+        stages: []
+      };
+    });
 
   state.projects.push(...imported);
   saveState();
@@ -1429,12 +2218,9 @@ function buildStateFromBase44Exports(fileMap, fallbackState) {
       nature: row.nature || "",
       duration: row.duration || "",
       status: row.status || "",
-      budget: row.budget ? Number(row.budget) : null,
-      releaseDate: inferReleaseDate({
-        releaseDate: row.release_date || row.data_de_lancamento || "",
-        year: row.year || ""
-      }),
-      spent: row.spent ? Number(row.spent) : null,
+      budget: parseCurrencyInputBRL(row.budget || ""),
+      releaseDate: releaseDateFromRawOrYear(row.release_date || row.data_de_lancamento || "", row.year || ""),
+      spent: parseCurrencyInputBRL(row.spent || ""),
       notes: row.notes || "",
       description: row.description || "",
       stages: linkedStages
@@ -1453,6 +2239,7 @@ function buildStateFromBase44Exports(fileMap, fallbackState) {
   };
   settings.itemColors = mergeItemColors(buildDefaultItemColors(settings), {
     categories: buildItemColorMap(categoryRows, settings.categories, DEFAULT_ITEM_COLOR_PALETTES.categories),
+    durations: buildItemColorMap(durationRows, settings.durations, DEFAULT_ITEM_COLOR_PALETTES.durations),
     formats: buildItemColorMap(formatRows, settings.formats, DEFAULT_ITEM_COLOR_PALETTES.formats),
     natures: buildItemColorMap(natureRows, settings.natures, DEFAULT_ITEM_COLOR_PALETTES.natures),
     statuses: buildItemColorMap(statusRows, settings.statuses, DEFAULT_ITEM_COLOR_PALETTES.statuses)
@@ -1460,7 +2247,7 @@ function buildStateFromBase44Exports(fileMap, fallbackState) {
 
   const timeline = defaultTimelineWindow();
 
-  return { settings, projects, timeline };
+  return { settings, projects, timeline, users: fallbackState.users || seedState().users };
 }
 
 function parseCsv(text) {
@@ -1538,6 +2325,24 @@ function monthFromDate(date) {
   return value.slice(0, 7);
 }
 
+function setReleaseDateMonth(originalDate, targetMonth) {
+  if (!isValidMonth(targetMonth)) return "";
+  const normalized = normalizeDateInput(originalDate);
+  const baseDay = normalized ? Number(normalized.slice(8, 10)) : 1;
+  const [year, month] = targetMonth.split("-").map(Number);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const day = String(Math.max(1, Math.min(baseDay, daysInMonth))).padStart(2, "0");
+  return `${year}-${String(month).padStart(2, "0")}-${day}`;
+}
+
+function releaseDateFromRawOrYear(rawReleaseDate, rawYear) {
+  const normalized = normalizeDateInput(rawReleaseDate);
+  if (normalized) return normalized;
+  const year = Number(rawYear);
+  if (Number.isInteger(year) && year > 0) return `${year}-01-01`;
+  return "";
+}
+
 function isValidDateIso(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return false;
   const [year, month, day] = String(value).split("-").map(Number);
@@ -1551,9 +2356,27 @@ function normalizeDateInput(value) {
 
   if (isValidDateIso(raw)) return raw;
 
-  const dmy = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const dmy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (dmy) {
-    const iso = `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+    const day = String(Number(dmy[1])).padStart(2, "0");
+    const month = String(Number(dmy[2])).padStart(2, "0");
+    const iso = `${dmy[3]}-${month}-${day}`;
+    return isValidDateIso(iso) ? iso : "";
+  }
+
+  const dmyDash = raw.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dmyDash) {
+    const day = String(Number(dmyDash[1])).padStart(2, "0");
+    const month = String(Number(dmyDash[2])).padStart(2, "0");
+    const iso = `${dmyDash[3]}-${month}-${day}`;
+    return isValidDateIso(iso) ? iso : "";
+  }
+
+  const ymdSlash = raw.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if (ymdSlash) {
+    const month = String(Number(ymdSlash[2])).padStart(2, "0");
+    const day = String(Number(ymdSlash[3])).padStart(2, "0");
+    const iso = `${ymdSlash[1]}-${month}-${day}`;
     return isValidDateIso(iso) ? iso : "";
   }
 
@@ -1563,9 +2386,65 @@ function normalizeDateInput(value) {
   return "";
 }
 
+function maskDateTextPtBr(value) {
+  const digits = String(value || "")
+    .replace(/\D/g, "")
+    .slice(0, 8);
+  if (!digits) return "";
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+}
+
+function hashPassword(password) {
+  const value = String(password || "");
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return `h_${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function getPlatformLink() {
+  if (window.location.protocol === "file:") return window.location.href;
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
+function applyPtBrLocaleToDateInputs(scope = document) {
+  scope.querySelectorAll('input[type="date"], input[type="month"]').forEach((input) => {
+    input.setAttribute("lang", "pt-BR");
+    input.setAttribute("data-locale", "pt-BR");
+  });
+}
+
+function syncProjectYearFromReleaseDate() {
+  const releaseTextInput = document.getElementById("projectReleaseDateText");
+  const releasePickerInput = document.getElementById("projectReleaseDatePicker");
+  const yearInput = document.getElementById("projectYear");
+  if (!releaseTextInput || !releasePickerInput || !yearInput) return;
+
+  const normalized = normalizeDateInput(releaseTextInput.value || releasePickerInput.value || "");
+  if (normalized) {
+    releasePickerInput.value = normalized;
+    yearInput.value = normalized.slice(0, 4);
+    yearInput.disabled = true;
+    return;
+  }
+  if (!String(releaseTextInput.value || "").trim()) releasePickerInput.value = "";
+  yearInput.disabled = false;
+}
+
 function inferReleaseDate(source) {
+  const hasExplicitReleaseField =
+    Object.prototype.hasOwnProperty.call(source || {}, "releaseDate") ||
+    Object.prototype.hasOwnProperty.call(source || {}, "release_date") ||
+    Object.prototype.hasOwnProperty.call(source || {}, "dataDeLancamento") ||
+    Object.prototype.hasOwnProperty.call(source || {}, "data_de_lancamento");
+
   const direct = normalizeDateInput(source?.releaseDate || source?.release_date || source?.dataDeLancamento || source?.data_de_lancamento || "");
   if (direct) return direct;
+  if (hasExplicitReleaseField) return "";
 
   const rawYear = Number(source?.year || source?.ano);
   if (Number.isInteger(rawYear) && rawYear > 0) return `${rawYear}-01-01`;
@@ -1582,16 +2461,14 @@ function formatDatePtBr(isoDate) {
 function getReleaseMarkerData(releaseDate, timelineStart, timelineEnd) {
   const normalized = normalizeDateInput(releaseDate);
   if (!normalized || !isValidMonth(timelineStart) || !isValidMonth(timelineEnd)) return null;
-  const [year, month, day] = normalized.split("-").map(Number);
+  const [year, month] = normalized.split("-").map(Number);
   const monthIso = `${year}-${String(month).padStart(2, "0")}`;
   const monthIndex = monthToIndex(monthIso);
   const startIndex = monthToIndex(timelineStart);
   const endIndex = monthToIndex(timelineEnd);
   if (monthIndex < startIndex || monthIndex > endIndex) return null;
 
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const dayOffset = Math.max(0, Math.min(day - 1, daysInMonth - 1)) / daysInMonth;
-  const offsetMonths = monthIndex - startIndex + dayOffset;
+  const offsetMonths = monthIndex - startIndex;
 
   return {
     offsetMonths,
@@ -1695,7 +2572,18 @@ function cardHtml(title, value, icon = "projects") {
 
 function inlineSelect(field, projectId, currentValue, options, badgeClass = "") {
   const values = ["", ...options.filter((v) => String(v || "").trim())];
-  const colorKey = field === "category" ? "categories" : field === "format" ? "formats" : field === "nature" ? "natures" : field === "status" ? "statuses" : "";
+  const colorKey =
+    field === "category"
+      ? "categories"
+      : field === "format"
+        ? "formats"
+        : field === "nature"
+          ? "natures"
+          : field === "duration"
+            ? "durations"
+            : field === "status"
+              ? "statuses"
+              : "";
   const hexColor = colorKey ? getConfigItemColor(colorKey, currentValue, 0, true) : "";
   const inlineStyle = hexColor ? ` style="background:${hexToRgba(hexColor, 0.16)};border-color:${hexToRgba(hexColor, 0.45)}"` : "";
   const cls = `cell-inline-select${field === "status" && !inlineStyle && badgeClass ? ` status-${badgeClass}` : ""}`;
@@ -1797,6 +2685,32 @@ function monthLabelLong(isoMonth) {
   return `${labels[Number(m) - 1]} ${y}`;
 }
 
+function monthLabelPtBrFull(isoMonth) {
+  if (!isValidMonth(isoMonth)) return "";
+  const labels = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+  const [y, m] = isoMonth.split("-");
+  return `${labels[Number(m) - 1]}/${y}`;
+}
+
+function updateStageRowMonthLabels(row) {
+  if (!row) return;
+  const startInput = row.querySelector('[data-field="start"]');
+  const endInput = row.querySelector('[data-field="end"]');
+  const startLabel = row.querySelector('[data-month-label="start"]');
+  const endLabel = row.querySelector('[data-month-label="end"]');
+  if (startLabel) startLabel.textContent = monthLabelPtBrFull(startInput?.value) || "Selecione mês/ano";
+  if (endLabel) endLabel.textContent = monthLabelPtBrFull(endInput?.value) || "Selecione mês/ano";
+}
+
+function updateStageDialogMonthLabels() {
+  const startInput = document.getElementById("stageStart");
+  const endInput = document.getElementById("stageEnd");
+  const startLabel = document.getElementById("stageStartLabel");
+  const endLabel = document.getElementById("stageEndLabel");
+  if (startLabel) startLabel.textContent = monthLabelPtBrFull(startInput?.value) || "Selecione mês/ano";
+  if (endLabel) endLabel.textContent = monthLabelPtBrFull(endInput?.value) || "Selecione mês/ano";
+}
+
 function timelineRangeLabel(start, end) {
   if (!isValidMonth(start) || !isValidMonth(end)) return "";
   return `${monthLabelLong(start)} — ${monthLabelLong(end)}`;
@@ -1808,6 +2722,36 @@ function isValidMonth(value) {
 
 function money(value) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 }).format(value || 0);
+}
+
+function formatCurrencyInputBRL(value) {
+  if (!hasNumericValue(value)) return "";
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(
+    Number(value)
+  );
+}
+
+function parseCurrencyInputBRL(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  let clean = raw.replace(/\s/g, "").replace(/R\$/gi, "").replace(/[^\d,.-]/g, "");
+  if (!clean) return null;
+
+  if (clean.includes(",") && clean.includes(".")) {
+    clean = clean.replace(/\./g, "").replace(",", ".");
+  } else if (clean.includes(",")) {
+    clean = clean.replace(/\./g, "").replace(",", ".");
+  } else {
+    const dots = clean.split(".");
+    if (dots.length > 2) {
+      const decimalPart = dots.pop();
+      clean = `${dots.join("")}.${decimalPart}`;
+    }
+  }
+
+  const numeric = Number(clean);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function hasNumericValue(value) {
@@ -1879,6 +2823,7 @@ const DEFAULT_ITEM_COLOR_PALETTES = {
   categories: ["#f3ba00", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#06b6d4"],
   formats: ["#60a5fa", "#34d399", "#f472b6", "#f59e0b", "#a78bfa", "#22c55e"],
   natures: ["#10b981", "#0ea5e9", "#f97316", "#ef4444", "#8b5cf6", "#14b8a6"],
+  durations: ["#f59e0b", "#14b8a6", "#6366f1", "#0ea5e9", "#16a34a", "#eab308"],
   statuses: ["#3b82f6", "#10b981", "#f59e0b", "#94a3b8", "#f97316", "#64748b"]
 };
 
@@ -1893,6 +2838,7 @@ function buildDefaultItemColors(settings = {}) {
     categories: arrayToColorMap(settings.categories, DEFAULT_ITEM_COLOR_PALETTES.categories),
     formats: arrayToColorMap(settings.formats, DEFAULT_ITEM_COLOR_PALETTES.formats),
     natures: arrayToColorMap(settings.natures, DEFAULT_ITEM_COLOR_PALETTES.natures),
+    durations: arrayToColorMap(settings.durations, DEFAULT_ITEM_COLOR_PALETTES.durations),
     statuses: arrayToColorMap(settings.statuses, DEFAULT_ITEM_COLOR_PALETTES.statuses)
   };
 }
@@ -2098,6 +3044,87 @@ function readPersistedCandidates(key) {
   return out;
 }
 
+function openIndexedDb() {
+  return new Promise((resolve, reject) => {
+    if (!window?.indexedDB) {
+      resolve(null);
+      return;
+    }
+    const request = window.indexedDB.open(IDB_NAME, 1);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+    };
+  });
+}
+
+function idbGet(key) {
+  return openIndexedDb()
+    .then((db) => {
+      if (!db) return null;
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, "readonly");
+        const store = tx.objectStore(IDB_STORE);
+        const req = store.get(key);
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => resolve(req.result ?? null);
+      }).finally(() => db.close());
+    })
+    .catch(() => null);
+}
+
+function idbSet(key, value) {
+  return openIndexedDb()
+    .then((db) => {
+      if (!db) return false;
+      return new Promise((resolve) => {
+        const tx = db.transaction(IDB_STORE, "readwrite");
+        const store = tx.objectStore(IDB_STORE);
+        store.put(value, key);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+      }).finally(() => db.close());
+    })
+    .catch(() => false);
+}
+
+async function persistStateToIndexedDb(stateRaw, projectsRaw) {
+  const okState = await idbSet(IDB_STATE_KEY, stateRaw);
+  const okProjects = await idbSet(IDB_PROJECTS_KEY, projectsRaw);
+  return okState || okProjects;
+}
+
+async function hydrateStateFromIndexedDb(currentState) {
+  const [rawState, rawProjects] = await Promise.all([idbGet(IDB_STATE_KEY), idbGet(IDB_PROJECTS_KEY)]);
+  let candidate = currentState;
+
+  if (rawState) {
+    try {
+      const parsed = JSON.parse(String(rawState));
+      const merged = mergeState(parsed);
+      if (Array.isArray(merged.projects) && merged.projects.length > candidate.projects.length) candidate = merged;
+    } catch {}
+  }
+
+  if (rawProjects) {
+    try {
+      const parsedProjects = JSON.parse(String(rawProjects));
+      if (Array.isArray(parsedProjects) && parsedProjects.length > candidate.projects.length) {
+        candidate = {
+          ...candidate,
+          projects: parsedProjects
+            .filter((project) => project && typeof project === "object")
+            .map((project) => ({ ...project, releaseDate: inferReleaseDate(project) }))
+        };
+      }
+    } catch {}
+  }
+
+  return candidate;
+}
+
 function nextCode() {
   const skus = state.projects.map((p) => String(p.code || "").trim()).filter(Boolean);
   const matched = skus.map((sku) => sku.match(/^(\d+)-(\d+)$/)).filter(Boolean);
@@ -2148,6 +3175,14 @@ function saveState() {
   } catch (error) {
     console.warn("[Originais] Falha ao salvar backup de projetos.", error);
   }
+
+  // Persistência robusta para recargas locais no Chrome.
+  void persistStateToIndexedDb(serialized, JSON.stringify(state.projects || [])).then((ok) => {
+    if (!ok && !hasShownStorageWarning) {
+      hasShownStorageWarning = true;
+      alert("Não foi possível salvar os dados locais no navegador (IndexedDB/localStorage).");
+    }
+  });
 }
 
 function loadState() {
@@ -2261,10 +3296,30 @@ function mergeState(parsed) {
     ...project,
     releaseDate: inferReleaseDate(project)
   }));
+  const users = Array.isArray(parsed?.users) && parsed.users.length
+    ? parsed.users
+        .filter((user) => user && typeof user === "object")
+        .map((user) => ({
+          id: user.id || uid(),
+          name: String(user.name || "").trim(),
+          email: String(user.email || "").trim().toLowerCase(),
+          role: ["ADMIN", "EDITOR", "LEITOR"].includes(user.role) ? user.role : "LEITOR",
+          passwordHash:
+            String(user.passwordHash || "").trim() ||
+            (
+              [DEFAULT_ADMIN_EMAIL, LEGACY_ADMIN_EMAIL].includes(String(user.email || "").trim().toLowerCase())
+                ? hashPassword(DEFAULT_ADMIN_PASSWORD)
+                : ""
+            ),
+          invitedAt: user.invitedAt || ""
+        }))
+        .filter((user) => user.name && user.email)
+    : base.users;
 
   return {
     settings: mergedSettings,
     projects,
+    users,
     timeline: {
       start: parsed?.timeline?.start || defaultTimelineWindow().start,
       end: parsed?.timeline?.end || defaultTimelineWindow().end,
@@ -2281,6 +3336,31 @@ function seedState() {
   if (window.BASE44_SEED?.projects?.length) {
     const cloned = structuredClone(window.BASE44_SEED);
     cloned.settings = cloned.settings || {};
+    cloned.users = Array.isArray(cloned.users) && cloned.users.length
+      ? cloned.users.map((user) => ({
+          id: user.id || uid(),
+          name: String(user.name || "").trim(),
+          email: String(user.email || "").trim().toLowerCase(),
+          role: ["ADMIN", "EDITOR", "LEITOR"].includes(user.role) ? user.role : "LEITOR",
+          passwordHash:
+            String(user.passwordHash || "").trim() ||
+            (
+              [DEFAULT_ADMIN_EMAIL, LEGACY_ADMIN_EMAIL].includes(String(user.email || "").trim().toLowerCase())
+                ? hashPassword(DEFAULT_ADMIN_PASSWORD)
+                : ""
+            ),
+          invitedAt: user.invitedAt || new Date().toISOString().slice(0, 10)
+        }))
+      : [
+          {
+            id: uid(),
+            name: "Administrador",
+            email: DEFAULT_ADMIN_EMAIL,
+            role: "ADMIN",
+            passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
+            invitedAt: new Date().toISOString().slice(0, 10)
+          }
+        ];
     cloned.projects = (cloned.projects || []).map((project) => ({
       ...project,
       releaseDate: inferReleaseDate(project)
@@ -2351,6 +3431,11 @@ function seedState() {
           Ficção: "#10b981",
           Animação: "#f97316"
         },
+        durations: {
+          "Curta-metragem": "#f59e0b",
+          "Média-metragem": "#14b8a6",
+          "Longa-metragem": "#6366f1"
+        },
         statuses: {
           "Em andamento": "#3b82f6",
           Concluído: "#10b981",
@@ -2359,6 +3444,16 @@ function seedState() {
         }
       }
     },
+    users: [
+      {
+        id: uid(),
+        name: "Administrador",
+        email: DEFAULT_ADMIN_EMAIL,
+        role: "ADMIN",
+        passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
+        invitedAt: new Date().toISOString().slice(0, 10)
+      }
+    ],
     projects,
     timeline: {
       ...defaultTimelineWindow()

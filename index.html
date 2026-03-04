@@ -3,11 +3,38 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Language" content="pt-BR" />
   <title>Originais Lumine</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="app-shell">
+  <section id="loginView" class="login-view" hidden>
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="logo-mark" aria-hidden="true">
+          <span class="logo-l">L</span>
+          <span class="logo-point"></span>
+        </div>
+        <div>
+          <strong>ORIGINAIS</strong>
+          <small>LUMINE</small>
+        </div>
+      </div>
+      <form id="loginForm" class="login-form" autocomplete="on">
+        <label>E-mail
+          <input id="loginEmail" type="email" required autocomplete="email" />
+        </label>
+        <label>Senha
+          <input id="loginPassword" type="password" required autocomplete="current-password" />
+        </label>
+        <p id="loginError" class="login-error" hidden></p>
+        <button type="submit" class="btn accent">Entrar</button>
+        <button id="forgotPasswordBtn" type="button" class="login-forgot-btn">Esqueci minha senha!</button>
+      </form>
+    </div>
+  </section>
+
+  <div id="appShell" class="app-shell" hidden>
     <aside class="sidebar">
       <div class="brand">
         <div class="logo-mark" aria-hidden="true">
@@ -24,11 +51,26 @@
         <button class="nav-btn active" data-tab="dashboard">Dashboard</button>
         <button class="nav-btn" data-tab="cronograma">Cronograma</button>
         <button class="nav-btn" data-tab="projetos">Projetos</button>
+        <button class="nav-btn" data-tab="usuarios">Usuários</button>
         <button class="nav-btn" data-tab="configuracoes">Configurações</button>
       </nav>
     </aside>
 
     <main class="content">
+      <div class="content-top-actions">
+        <div id="profileMenu" class="profile-menu">
+          <button id="profileMenuBtn" class="btn light profile-menu-btn" type="button" aria-label="Perfil">
+            <svg class="profile-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a5 5 0 1 0-5-5 5 5 0 0 0 5 5zm0 2c-4.42 0-8 2.24-8 5v1h16v-1c0-2.76-3.58-5-8-5z"/></svg>
+            <svg class="profile-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z"/></svg>
+          </button>
+          <div id="profileMenuList" class="profile-menu-list" hidden>
+            <div id="profileMenuUser" class="profile-menu-user"></div>
+            <button type="button" id="profileViewEditBtn">Ver e Editar Perfil</button>
+            <button type="button" id="profileLogoutBtn">Sair</button>
+          </div>
+        </div>
+      </div>
+
       <section id="dashboard" class="tab active">
         <header class="view-header">
           <div>
@@ -61,6 +103,10 @@
           <div class="filter-row">
             <strong>Duração:</strong>
             <div id="dashboardDurationChips" class="chips"></div>
+          </div>
+          <div class="filter-row">
+            <strong>Projeto:</strong>
+            <div id="dashboardProjectFilter"></div>
           </div>
         </section>
 
@@ -140,6 +186,10 @@
             <strong>Duração:</strong>
             <div id="ganttDurationChips" class="chips"></div>
           </div>
+          <div class="filter-row">
+            <strong>Projeto:</strong>
+            <div id="ganttProjectFilter"></div>
+          </div>
         </section>
 
         <div class="timeline-toolbar">
@@ -158,8 +208,8 @@
         </div>
 
         <div class="timeline-hidden-inputs" hidden>
-          <input type="month" id="timelineStart" />
-          <input type="month" id="timelineEnd" />
+          <input type="month" id="timelineStart" lang="pt-BR" />
+          <input type="month" id="timelineEnd" lang="pt-BR" />
           <button id="applyTimeline" class="btn light">Aplicar</button>
         </div>
 
@@ -167,52 +217,58 @@
       </section>
 
       <section id="projetos" class="tab">
-        <header class="view-header">
-          <div>
-            <h1>Projetos</h1>
-            <p>Gerencie suas produções audiovisuais</p>
-          </div>
-          <div class="header-actions">
-            <button id="btnImportCsv" class="btn light">Importar CSV</button>
-            <input id="csvInput" type="file" accept=".csv" multiple hidden />
-            <button id="btnNewProject" class="btn accent">+ Novo Projeto</button>
-          </div>
-        </header>
+        <div class="projects-top-sticky">
+          <header class="view-header">
+            <div>
+              <h1>Projetos</h1>
+              <p>Gerencie suas produções audiovisuais</p>
+            </div>
+            <div class="header-actions">
+              <button id="btnImportCsv" class="btn light">Importar CSV</button>
+              <input id="csvInput" type="file" accept=".csv" multiple hidden />
+              <button id="btnNewProject" class="btn accent">+ Novo Projeto</button>
+            </div>
+          </header>
 
-        <div class="dashboard-top-controls">
-          <div class="year-inline">
-            <strong>ANO:</strong>
-            <div id="projectYears" class="chips"></div>
+          <div class="dashboard-top-controls">
+            <div class="year-inline">
+              <strong>ANO:</strong>
+              <div id="projectYears" class="chips"></div>
+            </div>
+            <div class="header-actions">
+              <button id="btnFilterProjects" class="btn light">Filtros <span class="filter-arrow">▾</span></button>
+            </div>
           </div>
-          <div class="header-actions">
-            <button id="btnFilterProjects" class="btn light">Filtros <span class="filter-arrow">▾</span></button>
+
+          <section id="projectFiltersPanel" class="dashboard-filters" hidden>
+            <div class="filter-row">
+              <strong>Categoria:</strong>
+              <div id="projectCategoryChips" class="chips"></div>
+            </div>
+            <div class="filter-row">
+              <strong>Formato:</strong>
+              <div id="projectFormatChips" class="chips"></div>
+            </div>
+            <div class="filter-row">
+              <strong>Natureza:</strong>
+              <div id="projectNatureChips" class="chips"></div>
+            </div>
+            <div class="filter-row">
+              <strong>Duração:</strong>
+              <div id="projectDurationChips" class="chips"></div>
+            </div>
+            <div class="filter-row">
+              <strong>Projeto:</strong>
+              <div id="projectProjectFilter"></div>
+            </div>
+          </section>
+
+          <div class="table-tools">
+            <input id="projectSearch" placeholder="Buscar por nome ou SKU..." />
           </div>
         </div>
 
-        <section id="projectFiltersPanel" class="dashboard-filters" hidden>
-          <div class="filter-row">
-            <strong>Categoria:</strong>
-            <div id="projectCategoryChips" class="chips"></div>
-          </div>
-          <div class="filter-row">
-            <strong>Formato:</strong>
-            <div id="projectFormatChips" class="chips"></div>
-          </div>
-          <div class="filter-row">
-            <strong>Natureza:</strong>
-            <div id="projectNatureChips" class="chips"></div>
-          </div>
-          <div class="filter-row">
-            <strong>Duração:</strong>
-            <div id="projectDurationChips" class="chips"></div>
-          </div>
-        </section>
-
-        <div class="table-tools">
-          <input id="projectSearch" placeholder="Buscar por nome ou SKU..." />
-        </div>
-
-        <div class="table-wrap">
+        <div class="table-wrap projects-table-wrap">
           <table>
             <thead>
               <tr>
@@ -221,13 +277,52 @@
                 <th>Categoria</th>
                 <th>Formato</th>
                 <th>Natureza</th>
+                <th>Duração</th>
                 <th>Gasto</th>
-                <th>Data de Lançamento</th>
+                <th>Lançamento</th>
                 <th>Status</th>
                 <th>Ações</th>
               </tr>
             </thead>
             <tbody id="projectsTableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="usuarios" class="tab">
+        <header class="view-header">
+          <div>
+            <h1>Usuários</h1>
+            <p>Convide usuários e defina níveis de acesso</p>
+          </div>
+          <div class="header-actions">
+            <button id="btnCreateUser" class="btn accent">+ Cadastrar Usuário</button>
+            <button id="btnInviteUser" class="btn soft small">Convidar Usuário</button>
+          </div>
+        </header>
+
+        <article class="panel user-roles-panel">
+          <h3>Níveis de Gestão</h3>
+          <div class="user-role-grid">
+            <div><strong>ADMIN</strong><small>Gestão completa</small></div>
+            <div><strong>EDITOR</strong><small>Edição de conteúdo, sem gestão de usuários</small></div>
+            <div><strong>LEITOR</strong><small>Somente visualização</small></div>
+          </div>
+        </article>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Nome</th>
+                <th>E-mail</th>
+                <th>Função</th>
+                <th>Senha</th>
+                <th>Convite</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+            <tbody id="usersTableBody"></tbody>
           </table>
         </div>
       </section>
@@ -260,13 +355,22 @@
       <div class="form-grid">
         <label>SKU <input id="projectCode" required /></label>
         <label>Título <input id="projectTitle" required /></label>
+        <label>Ano <input id="projectYear" type="number" min="1900" max="2100" /></label>
         <label>Categoria <select id="projectCategory"></select></label>
         <label>Formato <select id="projectFormat"></select></label>
         <label>Natureza <select id="projectNature"></select></label>
         <label>Duração <select id="projectDuration"></select></label>
         <label>Status <select id="projectStatus"></select></label>
-        <label>Gasto (R$) <input id="projectBudget" type="number" min="0" step="0.01" /></label>
-        <label>Data de Lançamento <input id="projectReleaseDate" type="text" inputmode="numeric" placeholder="dd/mm/aaaa" maxlength="10" /></label>
+        <label>Gasto (R$) <input id="projectBudget" type="text" inputmode="decimal" placeholder="R$ 0,00" /></label>
+        <label>Lançamento
+          <div class="release-field-wrap">
+            <input id="projectReleaseDateText" class="release-field-text" type="text" inputmode="numeric" placeholder="dd/mm/aaaa" />
+            <button id="projectReleaseDateOpen" type="button" class="btn light release-field-btn" title="Selecionar data" aria-label="Selecionar data">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h2v2h6V2h2v2h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3V2zm13 8H4v8h16v-8zM4 8h16V6H4v2z"/></svg>
+            </button>
+            <input id="projectReleaseDatePicker" class="release-field-picker" type="date" lang="pt-BR" />
+          </div>
+        </label>
       </div>
 
       <label>Observações
@@ -276,7 +380,7 @@
       <div class="panel">
         <div class="panel-head">
           <h3>Etapas</h3>
-          <button id="btnAddStage" type="button" class="btn light">+ Etapa</button>
+          <button id="btnAddStage" type="button" class="btn accent">+ Etapa</button>
         </div>
         <div id="projectStages"></div>
       </div>
@@ -285,6 +389,52 @@
         <button id="btnDeleteProject" type="button" class="btn danger">Excluir</button>
         <button id="btnCancelDialog" type="button" class="btn light">Cancelar</button>
         <button class="btn accent" type="submit">Salvar</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="userDialog">
+    <form id="userForm" method="dialog">
+      <h3 id="userDialogTitle">Cadastrar Usuário</h3>
+      <input type="hidden" id="userId" />
+      <div class="form-grid user-form-grid">
+        <label>Nome
+          <input id="userName" required />
+        </label>
+        <label>E-mail
+          <input id="userEmail" type="email" required />
+        </label>
+        <label>Função
+          <select id="userRole">
+            <option>ADMIN</option>
+            <option>EDITOR</option>
+            <option>LEITOR</option>
+          </select>
+        </label>
+        <label>Senha
+          <input id="userPassword" type="password" autocomplete="new-password" minlength="6" placeholder="Mínimo 6 caracteres" />
+        </label>
+        <label>Confirmar senha
+          <input id="userPasswordConfirm" type="password" autocomplete="new-password" minlength="6" />
+        </label>
+      </div>
+      <p id="userPasswordHint" class="dialog-hint" hidden>Deixe os campos de senha em branco para manter a senha atual.</p>
+      <menu class="dialog-actions">
+        <button type="button" id="userCancelBtn" class="btn light">Cancelar</button>
+        <button type="submit" class="btn accent">Salvar Usuário</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="inviteDialog">
+    <form id="inviteForm" method="dialog">
+      <h3>Convidar Usuário</h3>
+      <label>E-mail
+        <input id="inviteEmail" type="email" required placeholder="email@dominio.com" />
+      </label>
+      <menu class="dialog-actions">
+        <button type="button" id="inviteCancelBtn" class="btn light">Cancelar</button>
+        <button type="submit" class="btn soft">Enviar Convite</button>
       </menu>
     </form>
   </dialog>
@@ -313,10 +463,12 @@
         <select data-field="stageId"></select>
       </label>
       <label>Início
-        <input data-field="start" type="month" />
+        <input data-field="start" type="month" lang="pt-BR" />
+        <small class="month-pt-label" data-month-label="start"></small>
       </label>
       <label>Fim
-        <input data-field="end" type="month" />
+        <input data-field="end" type="month" lang="pt-BR" />
+        <small class="month-pt-label" data-month-label="end"></small>
       </label>
       <button data-remove type="button" class="btn danger">Excluir</button>
     </div>
@@ -335,10 +487,12 @@
           <select id="stageTypeSelect"></select>
         </label>
         <label>Início
-          <input type="month" id="stageStart" required />
+          <input type="month" id="stageStart" lang="pt-BR" required />
+          <small class="month-pt-label" id="stageStartLabel"></small>
         </label>
         <label>Fim
-          <input type="month" id="stageEnd" required />
+          <input type="month" id="stageEnd" lang="pt-BR" required />
+          <small class="month-pt-label" id="stageEndLabel"></small>
         </label>
       </div>
       <label>Observações
