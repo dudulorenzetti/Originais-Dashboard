@@ -61,6 +61,8 @@ const DEFAULT_ADMIN_EMAIL = "eduardo.lorenzetti@lumine.tv";
 const LEGACY_ADMIN_EMAIL = "admin@originais.com";
 const DEFAULT_ADMIN_PASSWORD = "admin123";
 const DEFAULT_INVITED_PASSWORD = "lumine123";
+const SUPABASE_STATE_TABLE = "app_state";
+const SUPABASE_DEFAULT_STATE_ID = "originais-main";
 
 let state = seedState();
 let currentTab = "dashboard";
@@ -102,14 +104,21 @@ let draggingStage = null;
 let draggingRelease = null;
 let suppressLineClickUntil = 0;
 let currentUserId = "";
+let supabaseClientInstance = undefined;
+let supabaseStateId = SUPABASE_DEFAULT_STATE_ID;
+let supabaseSyncTimer = null;
+let supabaseSyncInFlight = false;
+let queuedSupabaseStateRaw = "";
+let hasShownSupabaseWarning = false;
 
 init();
 
 async function init() {
   state = loadState();
-  const beforeHydrateCount = Array.isArray(state?.projects) ? state.projects.length : 0;
+  const beforeHydrate = JSON.stringify(state);
   state = await hydrateStateFromIndexedDb(state);
-  if ((Array.isArray(state?.projects) ? state.projects.length : 0) !== beforeHydrateCount) saveState();
+  state = await hydrateStateFromSupabase(state);
+  if (JSON.stringify(state) !== beforeHydrate) saveState({ skipSupabase: true });
   ensureAdminAccount();
   applyPtBrLocaleToDateInputs(document);
   bindNavigation();
@@ -119,6 +128,7 @@ async function init() {
   restoreSessionUser();
   renderAll();
   applyAuthVisibility();
+  queueSupabaseSync(JSON.stringify(state));
 }
 
 function bindNavigation() {
@@ -3246,7 +3256,138 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
-function saveState() {
+function getSupabaseConfig() {
+  const cfg = window.__ORIGINAIS_SUPABASE__ || {};
+  const url = String(cfg.url || cfg.supabaseUrl || "").trim();
+  const anonKey = String(cfg.anonKey || cfg.key || "").trim();
+  const stateId = String(cfg.stateId || SUPABASE_DEFAULT_STATE_ID).trim() || SUPABASE_DEFAULT_STATE_ID;
+  return { url, anonKey, stateId };
+}
+
+function getSupabaseClient() {
+  if (supabaseClientInstance !== undefined) return supabaseClientInstance;
+  const { url, anonKey, stateId } = getSupabaseConfig();
+  supabaseStateId = stateId;
+  const factory = window.supabase?.createClient;
+  if (!url || !anonKey || typeof factory !== "function") {
+    supabaseClientInstance = null;
+    return null;
+  }
+  try {
+    supabaseClientInstance = factory(url, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+    return supabaseClientInstance;
+  } catch (error) {
+    console.warn("[Originais] Falha ao iniciar cliente Supabase.", error);
+    supabaseClientInstance = null;
+    return null;
+  }
+}
+
+function mergeUsersByEmail(primaryUsers = [], secondaryUsers = []) {
+  const byEmail = new Map();
+  [...secondaryUsers, ...primaryUsers].forEach((user) => {
+    if (!user || typeof user !== "object") return;
+    const email = String(user.email || "").trim().toLowerCase();
+    if (!email) return;
+    if (!byEmail.has(email)) byEmail.set(email, { ...user, email });
+  });
+  return [...byEmail.values()];
+}
+
+function mergeLocalAndRemoteState(localState, remoteState) {
+  if (!remoteState) return localState;
+  const localProjects = Array.isArray(localState?.projects) ? localState.projects : [];
+  const remoteProjects = Array.isArray(remoteState?.projects) ? remoteState.projects : [];
+
+  const primary = remoteProjects.length >= localProjects.length ? remoteState : localState;
+  const secondary = primary === remoteState ? localState : remoteState;
+
+  return {
+    ...primary,
+    users: mergeUsersByEmail(primary.users || [], secondary.users || [])
+  };
+}
+
+async function hydrateStateFromSupabase(currentState) {
+  const client = getSupabaseClient();
+  if (!client) return currentState;
+
+  try {
+    const { data, error } = await client
+      .from(SUPABASE_STATE_TABLE)
+      .select("state")
+      .eq("id", supabaseStateId)
+      .maybeSingle();
+    if (error) {
+      console.warn("[Originais] Falha ao carregar estado do Supabase.", error.message || error);
+      return currentState;
+    }
+    if (!data?.state) return currentState;
+    const parsed = typeof data.state === "string" ? JSON.parse(data.state) : data.state;
+    const remoteState = maybeRecoverProjectsFromBackup(mergeState(parsed));
+    return mergeLocalAndRemoteState(currentState, remoteState);
+  } catch (error) {
+    console.warn("[Originais] Falha ao hidratar estado remoto.", error);
+    return currentState;
+  }
+}
+
+async function persistStateToSupabase(stateRaw) {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const payload = typeof stateRaw === "string" ? JSON.parse(stateRaw) : stateRaw;
+    const { error } = await client.from(SUPABASE_STATE_TABLE).upsert(
+      {
+        id: supabaseStateId,
+        state: payload,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: "id" }
+    );
+    if (error) {
+      console.warn("[Originais] Falha ao persistir estado no Supabase.", error.message || error);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn("[Originais] Falha ao serializar/salvar estado no Supabase.", error);
+    return false;
+  }
+}
+
+function flushSupabaseSyncQueue() {
+  if (supabaseSyncInFlight) return;
+  if (!queuedSupabaseStateRaw) return;
+  const payload = queuedSupabaseStateRaw;
+  queuedSupabaseStateRaw = "";
+  supabaseSyncInFlight = true;
+  void persistStateToSupabase(payload)
+    .then((ok) => {
+      if (!ok && !hasShownSupabaseWarning) {
+        hasShownSupabaseWarning = true;
+        alert("Não foi possível sincronizar dados no Supabase. O app segue funcionando localmente.");
+      }
+    })
+    .finally(() => {
+      supabaseSyncInFlight = false;
+      if (queuedSupabaseStateRaw) flushSupabaseSyncQueue();
+    });
+}
+
+function queueSupabaseSync(stateRaw) {
+  if (!getSupabaseClient()) return;
+  queuedSupabaseStateRaw = stateRaw;
+  if (supabaseSyncTimer) clearTimeout(supabaseSyncTimer);
+  supabaseSyncTimer = setTimeout(() => {
+    supabaseSyncTimer = null;
+    flushSupabaseSyncQueue();
+  }, 500);
+}
+
+function saveState({ skipSupabase = false } = {}) {
   const serialized = JSON.stringify(state);
   if (!writePersistedValue(STORAGE_KEY, serialized)) {
     console.warn("[Originais] Falha ao persistir estado principal.");
@@ -3274,6 +3415,7 @@ function saveState() {
       alert("Não foi possível salvar os dados locais no navegador (IndexedDB/localStorage).");
     }
   });
+  if (!skipSupabase) queueSupabaseSync(serialized);
 }
 
 function loadState() {

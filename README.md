@@ -47,3 +47,53 @@ Chave: `originais_lumine_state_v2`
 
 ## Uso
 Abra `index.html` no navegador.
+
+## Supabase (dados compartilhados entre usuários)
+Para que convites/login funcionem em qualquer navegador/dispositivo, configure um backend compartilhado.
+
+### 1) Criar tabela no Supabase (SQL Editor)
+```sql
+create table if not exists public.app_state (
+  id text primary key,
+  state jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.app_state enable row level security;
+
+drop policy if exists "allow read app_state" on public.app_state;
+drop policy if exists "allow write app_state" on public.app_state;
+
+create policy "allow read app_state"
+on public.app_state
+for select
+to anon
+using (true);
+
+create policy "allow write app_state"
+on public.app_state
+for insert
+to anon
+with check (true);
+
+create policy "allow update app_state"
+on public.app_state
+for update
+to anon
+using (true)
+with check (true);
+```
+
+### 2) Configurar `config.js`
+Edite o arquivo `config.js`:
+- `url`: URL do projeto Supabase
+- `anonKey`: chave pública `anon` (não usar `service_role` no frontend)
+- `stateId`: identificador do workspace (ex.: `originais-main`)
+
+### 3) Publicar novamente
+Suba os arquivos atualizados (`index.html`, `script.js`, `config.js`).
+
+Quando configurado, o app:
+- continua salvando localmente (fallback);
+- sincroniza o estado no Supabase;
+- compartilha usuários/projetos/configurações entre navegadores.
