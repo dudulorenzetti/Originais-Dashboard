@@ -60,6 +60,7 @@ const BASE44_FILES = [
 const DEFAULT_ADMIN_EMAIL = "eduardo.lorenzetti@lumine.tv";
 const LEGACY_ADMIN_EMAIL = "admin@originais.com";
 const DEFAULT_ADMIN_PASSWORD = "admin123";
+const DEFAULT_INVITED_PASSWORD = "lumine123";
 
 let state = seedState();
 let currentTab = "dashboard";
@@ -195,6 +196,7 @@ function bindGlobalActions() {
 function bindAuthActions() {
   const loginForm = document.getElementById("loginForm");
   const forgotPasswordBtn = document.getElementById("forgotPasswordBtn");
+  const firstAccessBtn = document.getElementById("firstAccessBtn");
   const profileMenuBtn = document.getElementById("profileMenuBtn");
   const profileMenu = document.getElementById("profileMenu");
   const profileMenuList = document.getElementById("profileMenuList");
@@ -208,6 +210,13 @@ function bindAuthActions() {
       showLoginError("E-mail ou senha inválidos.");
       return;
     }
+    if (user.firstAccessPending) {
+      const completed = promptPasswordSetup(user, { contextLabel: "primeiro acesso", completeFirstAccess: true });
+      if (!completed) {
+        showLoginError("No primeiro acesso, defina sua senha para continuar.");
+        return;
+      }
+    }
 
     currentUserId = user.id;
     persistSessionUser();
@@ -218,30 +227,8 @@ function bindAuthActions() {
     renderAll();
   });
 
-  forgotPasswordBtn.addEventListener("click", () => {
-    const email = prompt("Informe o e-mail cadastrado:");
-    if (!email) return;
-    const normalizedEmail = String(email).trim().toLowerCase();
-    const user = state.users.find((item) => String(item.email || "").toLowerCase() === normalizedEmail);
-    if (!user) {
-      alert("E-mail não encontrado.");
-      return;
-    }
-    const pass1 = prompt("Digite a nova senha (mínimo 6 caracteres):");
-    if (!pass1) return;
-    if (String(pass1).length < 6) {
-      alert("A senha deve ter no mínimo 6 caracteres.");
-      return;
-    }
-    const pass2 = prompt("Confirme a nova senha:");
-    if (pass1 !== pass2) {
-      alert("A confirmação da senha não confere.");
-      return;
-    }
-    user.passwordHash = hashPassword(pass1);
-    saveState();
-    alert("Senha atualizada com sucesso.");
-  });
+  forgotPasswordBtn.addEventListener("click", startForgotPasswordFlow);
+  firstAccessBtn?.addEventListener("click", startFirstAccessFlow);
 
   profileMenuBtn.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -340,6 +327,63 @@ function clearLoginError() {
   error.hidden = true;
 }
 
+function promptPasswordSetup(user, { contextLabel = "redefinição de senha", completeFirstAccess = false } = {}) {
+  if (!user) return false;
+  const pass1 = prompt(`Digite a nova senha (${contextLabel}) (mínimo 6 caracteres):`);
+  if (!pass1) return false;
+  if (String(pass1).length < 6) {
+    alert("A senha deve ter no mínimo 6 caracteres.");
+    return false;
+  }
+  const pass2 = prompt("Confirme a nova senha:");
+  if (pass1 !== pass2) {
+    alert("A confirmação da senha não confere.");
+    return false;
+  }
+  user.passwordHash = hashPassword(pass1);
+  if (completeFirstAccess) user.firstAccessPending = false;
+  saveState();
+  return true;
+}
+
+function startForgotPasswordFlow() {
+  const email = prompt("Informe o e-mail cadastrado:");
+  if (!email) return;
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const user = state.users.find((item) => String(item.email || "").toLowerCase() === normalizedEmail);
+  if (!user) {
+    alert("E-mail não encontrado.");
+    return;
+  }
+  const updated = promptPasswordSetup(user, {
+    contextLabel: "redefinição de senha",
+    completeFirstAccess: Boolean(user.firstAccessPending)
+  });
+  if (!updated) return;
+  alert("Senha atualizada com sucesso.");
+}
+
+function startFirstAccessFlow() {
+  const email = prompt("Informe o e-mail do convite:");
+  if (!email) return;
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const user = state.users.find((item) => String(item.email || "").toLowerCase() === normalizedEmail);
+  if (!user) {
+    alert("E-mail não encontrado.");
+    return;
+  }
+  if (!user.firstAccessPending) {
+    alert("Esse usuário já concluiu o primeiro acesso. Use \"Esqueci minha senha\" se necessário.");
+    return;
+  }
+  const updated = promptPasswordSetup(user, { contextLabel: "primeiro acesso", completeFirstAccess: true });
+  if (!updated) return;
+  document.getElementById("loginEmail").value = user.email || normalizedEmail;
+  document.getElementById("loginPassword").value = "";
+  clearLoginError();
+  alert("Primeiro acesso concluído. Faça login com a nova senha.");
+}
+
 function ensureAdminAccount() {
   if (!Array.isArray(state.users)) state.users = [];
   const normalizedDefaultEmail = DEFAULT_ADMIN_EMAIL.toLowerCase();
@@ -360,7 +404,8 @@ function ensureAdminAccount() {
       email: DEFAULT_ADMIN_EMAIL,
       role: "ADMIN",
       passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
-      invitedAt: new Date().toISOString().slice(0, 10)
+      invitedAt: new Date().toISOString().slice(0, 10),
+      firstAccessPending: false
     };
     state.users.push(admin);
     saveState();
@@ -368,6 +413,10 @@ function ensureAdminAccount() {
   }
   if (!String(admin.passwordHash || "").trim()) {
     admin.passwordHash = hashPassword(DEFAULT_ADMIN_PASSWORD);
+    saveState();
+  }
+  if (admin.firstAccessPending) {
+    admin.firstAccessPending = false;
     saveState();
   }
 }
@@ -543,13 +592,34 @@ function bindDialog() {
     e.preventDefault();
     const payload = collectInviteForm();
     if (!payload) return;
-    const inviteLink = buildUserInviteLink(payload.email);
+    const inviteLink = buildUserInviteLink(payload.email, payload.role);
     const existingIdx = state.users.findIndex((user) => String(user.email || "").toLowerCase() === payload.email);
+    const invitedAt = new Date().toISOString().slice(0, 10);
+    const passwordHash = hashPassword(DEFAULT_INVITED_PASSWORD);
     if (existingIdx >= 0) {
-      state.users[existingIdx].invitedAt = new Date().toISOString().slice(0, 10);
-      saveState();
-      renderUsers();
+      const existing = state.users[existingIdx];
+      state.users[existingIdx] = {
+        ...existing,
+        name: String(existing.name || "").trim() || displayNameFromEmail(payload.email),
+        email: payload.email,
+        role: payload.role,
+        invitedAt,
+        passwordHash,
+        firstAccessPending: true
+      };
+    } else {
+      state.users.push({
+        id: uid(),
+        name: displayNameFromEmail(payload.email),
+        email: payload.email,
+        role: payload.role,
+        passwordHash,
+        invitedAt,
+        firstAccessPending: true
+      });
     }
+    saveState();
+    renderUsers();
     inviteDialog.close();
     window.location.href = inviteLink;
   });
@@ -1557,7 +1627,7 @@ function renderUsers() {
     .map((user) => {
       const invitedAt = user.invitedAt ? formatDatePtBr(user.invitedAt) : "";
       const inviteText = invitedAt ? `Convidado em ${invitedAt}` : "Sem convite";
-      const passwordState = user.passwordHash ? "Definida" : "Pendente";
+      const passwordState = user.firstAccessPending ? "Primeiro acesso" : user.passwordHash ? "Definida" : "Pendente";
       return `<tr>
         <td>${escapeHtml(user.name || "")}</td>
         <td>${escapeHtml(user.email || "")}</td>
@@ -1642,17 +1712,20 @@ function collectUserForm() {
     email,
     role: ["ADMIN", "EDITOR", "LEITOR"].includes(role) ? role : "LEITOR",
     passwordHash: password ? hashPassword(password) : String(existing?.passwordHash || ""),
-    invitedAt: existing?.invitedAt || new Date().toISOString().slice(0, 10)
+    invitedAt: existing?.invitedAt || new Date().toISOString().slice(0, 10),
+    firstAccessPending: password ? false : Boolean(existing?.firstAccessPending)
   };
 }
 
 function openInviteDialog() {
   document.getElementById("inviteEmail").value = "";
+  document.getElementById("inviteRole").value = "LEITOR";
   document.getElementById("inviteDialog").showModal();
 }
 
 function collectInviteForm() {
   const email = document.getElementById("inviteEmail").value.trim().toLowerCase();
+  const role = document.getElementById("inviteRole").value;
   if (!email) {
     alert("Preencha o e-mail.");
     return null;
@@ -1661,13 +1734,31 @@ function collectInviteForm() {
     alert("E-mail inválido.");
     return null;
   }
-  return { email };
+  return {
+    email,
+    role: ["ADMIN", "EDITOR", "LEITOR"].includes(role) ? role : "LEITOR"
+  };
 }
 
-function buildUserInviteLink(email) {
+function displayNameFromEmail(email) {
+  const value = String(email || "").trim();
+  if (!value.includes("@")) return "Usuário convidado";
+  const [local] = value.split("@");
+  const normalized = local.replace(/[._-]+/g, " ").trim();
+  if (!normalized) return "Usuário convidado";
+  return normalized
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function buildUserInviteLink(email, role) {
   const subject = encodeURIComponent("Convite de acesso - Originais Lumine");
   const platformLink = getPlatformLink();
-  const body = encodeURIComponent(`Você foi convidado para o sistema Originais Lumine.\n\nAcesse a plataforma: ${platformLink}`);
+  const body = encodeURIComponent(
+    `Você foi convidado para o sistema Originais Lumine.\n\nFunção: ${role}\nE-mail: ${email}\nSenha inicial: ${DEFAULT_INVITED_PASSWORD}\n\nNo primeiro acesso, clique em "Primeiro acesso" para criar sua senha.\n\nAcesse a plataforma: ${platformLink}`
+  );
   return `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${body}`;
 }
 
@@ -3311,7 +3402,8 @@ function mergeState(parsed) {
                 ? hashPassword(DEFAULT_ADMIN_PASSWORD)
                 : ""
             ),
-          invitedAt: user.invitedAt || ""
+          invitedAt: user.invitedAt || "",
+          firstAccessPending: Boolean(user.firstAccessPending)
         }))
         .filter((user) => user.name && user.email)
     : base.users;
@@ -3349,7 +3441,8 @@ function seedState() {
                 ? hashPassword(DEFAULT_ADMIN_PASSWORD)
                 : ""
             ),
-          invitedAt: user.invitedAt || new Date().toISOString().slice(0, 10)
+          invitedAt: user.invitedAt || new Date().toISOString().slice(0, 10),
+          firstAccessPending: Boolean(user.firstAccessPending)
         }))
       : [
           {
@@ -3358,7 +3451,8 @@ function seedState() {
             email: DEFAULT_ADMIN_EMAIL,
             role: "ADMIN",
             passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
-            invitedAt: new Date().toISOString().slice(0, 10)
+            invitedAt: new Date().toISOString().slice(0, 10),
+            firstAccessPending: false
           }
         ];
     cloned.projects = (cloned.projects || []).map((project) => ({
@@ -3451,7 +3545,8 @@ function seedState() {
         email: DEFAULT_ADMIN_EMAIL,
         role: "ADMIN",
         passwordHash: hashPassword(DEFAULT_ADMIN_PASSWORD),
-        invitedAt: new Date().toISOString().slice(0, 10)
+        invitedAt: new Date().toISOString().slice(0, 10),
+        firstAccessPending: false
       }
     ],
     projects,

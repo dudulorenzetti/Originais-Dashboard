@@ -29,7 +29,10 @@
         </label>
         <p id="loginError" class="login-error" hidden></p>
         <button type="submit" class="btn accent">Entrar</button>
-        <button id="forgotPasswordBtn" type="button" class="login-forgot-btn">Esqueci minha senha!</button>
+        <div class="login-help-actions">
+          <button id="forgotPasswordBtn" type="button" class="login-help-btn">Esqueci minha senha!</button>
+          <button id="firstAccessBtn" type="button" class="login-help-btn">Primeiro acesso</button>
+        </div>
       </form>
     </div>
   </section>
@@ -431,6 +434,13 @@
       <h3>Convidar Usuário</h3>
       <label>E-mail
         <input id="inviteEmail" type="email" required placeholder="email@dominio.com" />
+      </label>
+      <label>Função
+        <select id="inviteRole">
+          <option value="LEITOR">LEITOR</option>
+          <option value="EDITOR">EDITOR</option>
+          <option value="ADMIN">ADMIN</option>
+        </select>
       </label>
       <menu class="dialog-actions">
         <button type="button" id="inviteCancelBtn" class="btn light">Cancelar</button>

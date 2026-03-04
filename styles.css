@@ -75,14 +75,19 @@ body {
   font-size: 0.78rem;
 }
 
-.login-forgot-btn {
+.login-help-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.login-help-btn {
   border: 0;
   background: transparent;
   color: #475569;
   font-size: 0.76rem;
   cursor: pointer;
   text-decoration: underline;
-  justify-self: center;
   padding: 2px 4px;
 }
 
