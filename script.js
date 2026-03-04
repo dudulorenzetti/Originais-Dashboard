@@ -3281,7 +3281,8 @@ function escapeHtml(str) {
 
 function getSupabaseConfig() {
   const cfg = window.__ORIGINAIS_SUPABASE__ || {};
-  const url = String(cfg.url || cfg.supabaseUrl || "").trim();
+  const rawUrl = String(cfg.url || cfg.supabaseUrl || "").trim();
+  const url = rawUrl.replace(/\/+$/, "").replace(/\/rest\/v1$/i, "");
   const anonKey = String(cfg.anonKey || cfg.key || "").trim();
   const stateId = String(cfg.stateId || SUPABASE_DEFAULT_STATE_ID).trim() || SUPABASE_DEFAULT_STATE_ID;
   return { url, anonKey, stateId };
