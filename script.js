@@ -111,6 +111,7 @@ let supabaseSyncInFlight = false;
 let queuedSupabaseStateRaw = "";
 let hasShownSupabaseWarning = false;
 let hasShownSupabaseConfigWarning = false;
+let hasLoggedSupabaseTarget = false;
 
 async function init() {
   state = loadState();
@@ -342,8 +343,7 @@ function canEditContent() {
 }
 
 function canViewUsers() {
-  const role = getCurrentUserRole();
-  return role === "ADMIN" || role === "EDITOR";
+  return getCurrentUserRole() === "ADMIN";
 }
 
 function persistSessionUser() {
@@ -3512,22 +3512,49 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
+function isLocalRuntime() {
+  const protocol = String(window.location?.protocol || "").toLowerCase();
+  const hostname = String(window.location?.hostname || "").toLowerCase();
+  if (protocol === "file:") return true;
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname.endsWith(".local");
+}
+
+function normalizeSupabaseRuntimeEnv(mode, environments) {
+  const search = new URLSearchParams(window.location?.search || "");
+  const forcedEnv = String(search.get("env") || "").trim().toLowerCase();
+  if (forcedEnv && environments?.[forcedEnv]) return forcedEnv;
+
+  const normalizedMode = String(mode || "").trim().toLowerCase();
+  if (normalizedMode && normalizedMode !== "auto" && environments?.[normalizedMode]) return normalizedMode;
+
+  return isLocalRuntime() ? "local" : "production";
+}
+
 function getSupabaseConfig() {
   const cfg = window.__ORIGINAIS_SUPABASE__ || {};
-  const rawUrl = String(cfg.url || cfg.supabaseUrl || "").trim();
+  const environments = cfg.environments && typeof cfg.environments === "object" ? cfg.environments : null;
+  const envName = normalizeSupabaseRuntimeEnv(cfg.mode, environments);
+  const envCfg = environments?.[envName] && typeof environments[envName] === "object" ? environments[envName] : {};
+
+  const rawUrl = String(envCfg.url || envCfg.supabaseUrl || cfg.url || cfg.supabaseUrl || "").trim();
   const url = rawUrl.replace(/\/+$/, "").replace(/\/rest\/v1$/i, "");
-  const anonKey = String(cfg.anonKey || cfg.key || "").trim();
-  const stateId = String(cfg.stateId || SUPABASE_DEFAULT_STATE_ID).trim() || SUPABASE_DEFAULT_STATE_ID;
-  return { url, anonKey, stateId };
+  const anonKey = String(envCfg.anonKey || envCfg.key || cfg.anonKey || cfg.key || "").trim();
+  const stateId = String(envCfg.stateId || cfg.stateId || SUPABASE_DEFAULT_STATE_ID).trim() || SUPABASE_DEFAULT_STATE_ID;
+  const enabled = cfg.enabled !== false;
+  return { url, anonKey, stateId, envName, enabled };
 }
 
 function getSupabaseClient() {
   if (supabaseClientInstance !== undefined) return supabaseClientInstance;
-  const { url, anonKey, stateId } = getSupabaseConfig();
+  const { url, anonKey, stateId, envName, enabled } = getSupabaseConfig();
   supabaseStateId = stateId;
-  if (!url || !anonKey) {
+  if (!enabled || !url || !anonKey) {
     supabaseClientInstance = null;
     return null;
+  }
+  if (!hasLoggedSupabaseTarget) {
+    hasLoggedSupabaseTarget = true;
+    console.info(`[Originais] Supabase ativo no ambiente '${envName}' (stateId: ${stateId}).`);
   }
   const factory = window.supabase?.createClient;
   if (typeof factory !== "function") {

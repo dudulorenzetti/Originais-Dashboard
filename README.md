@@ -84,16 +84,47 @@ using (true)
 with check (true);
 ```
 
-### 2) Configurar `config.js`
-Edite o arquivo `config.js`:
-- `url`: URL do projeto Supabase
-- `anonKey`: chave pública `anon` (não usar `service_role` no frontend)
-- `stateId`: identificador do workspace (ex.: `originais-main`)
+### 2) Configurar `config.js` com DEV/PROD separado (recomendado)
+Use o formato abaixo no `config.js`:
+
+```js
+window.__ORIGINAIS_SUPABASE__ = {
+  mode: "auto",
+  environments: {
+    local: {
+      url: "https://SEU-PROJETO.supabase.co",
+      anonKey: "SUA_ANON_KEY",
+      stateId: "originais-dev"
+    },
+    production: {
+      url: "https://SEU-PROJETO.supabase.co",
+      anonKey: "SUA_ANON_KEY",
+      stateId: "originais-main"
+    }
+  }
+};
+```
+
+Com `mode: "auto"`:
+- local (`file://`, `localhost`, `127.0.0.1`) grava em `originais-dev`
+- web publicada grava em `originais-main`
+
+Assim, ajustes locais nao sobrescrevem dados da web.
 
 ### 3) Publicar novamente
 Suba os arquivos atualizados (`index.html`, `script.js`, `config.js`).
 
+## Fluxo seguro de testes (sem risco para a web)
+1. Teste localmente: os dados irao para `originais-dev`.
+2. Valide tudo no local.
+3. Publique os arquivos na web.
+4. Na web, os dados usados serao os de `originais-main`.
+
+Se precisar forcar ambiente manualmente:
+- `?env=local`
+- `?env=production`
+
 Quando configurado, o app:
 - continua salvando localmente (fallback);
 - sincroniza o estado no Supabase;
-- compartilha usuários/projetos/configurações entre navegadores.
+- compartilha usuarios/projetos/configuracoes entre navegadores no `stateId` do ambiente.
