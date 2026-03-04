@@ -110,6 +110,7 @@ let supabaseSyncTimer = null;
 let supabaseSyncInFlight = false;
 let queuedSupabaseStateRaw = "";
 let hasShownSupabaseWarning = false;
+let hasShownSupabaseConfigWarning = false;
 
 init();
 
@@ -211,11 +212,15 @@ function bindAuthActions() {
   const profileMenu = document.getElementById("profileMenu");
   const profileMenuList = document.getElementById("profileMenuList");
 
-  loginForm.addEventListener("submit", (event) => {
+  loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const email = String(document.getElementById("loginEmail").value || "").trim().toLowerCase();
     const password = document.getElementById("loginPassword").value;
-    const user = authenticateUser(email, password);
+    let user = authenticateUser(email, password);
+    if (!user) {
+      await refreshStateFromSupabaseNow();
+      user = authenticateUser(email, password);
+    }
     if (!user) {
       showLoginError("E-mail ou senha inválidos.");
       return;
@@ -337,6 +342,16 @@ function clearLoginError() {
   error.hidden = true;
 }
 
+async function refreshStateFromSupabaseNow() {
+  const before = JSON.stringify(state);
+  const merged = await hydrateStateFromSupabase(state);
+  if (JSON.stringify(merged) === before) return false;
+  state = merged;
+  ensureAdminAccount();
+  saveState({ skipSupabase: true });
+  return true;
+}
+
 function promptPasswordSetup(user, { contextLabel = "redefinição de senha", completeFirstAccess = false } = {}) {
   if (!user) return false;
   const pass1 = prompt(`Digite a nova senha (${contextLabel}) (mínimo 6 caracteres):`);
@@ -356,11 +371,15 @@ function promptPasswordSetup(user, { contextLabel = "redefinição de senha", co
   return true;
 }
 
-function startForgotPasswordFlow() {
+async function startForgotPasswordFlow() {
   const email = prompt("Informe o e-mail cadastrado:");
   if (!email) return;
   const normalizedEmail = String(email).trim().toLowerCase();
-  const user = state.users.find((item) => String(item.email || "").toLowerCase() === normalizedEmail);
+  let user = state.users.find((item) => String(item.email || "").toLowerCase() === normalizedEmail);
+  if (!user) {
+    await refreshStateFromSupabaseNow();
+    user = state.users.find((item) => String(item.email || "").toLowerCase() === normalizedEmail);
+  }
   if (!user) {
     alert("E-mail não encontrado.");
     return;
@@ -373,11 +392,15 @@ function startForgotPasswordFlow() {
   alert("Senha atualizada com sucesso.");
 }
 
-function startFirstAccessFlow() {
+async function startFirstAccessFlow() {
   const email = prompt("Informe o e-mail do convite:");
   if (!email) return;
   const normalizedEmail = String(email).trim().toLowerCase();
-  const user = state.users.find((item) => String(item.email || "").toLowerCase() === normalizedEmail);
+  let user = state.users.find((item) => String(item.email || "").toLowerCase() === normalizedEmail);
+  if (!user) {
+    await refreshStateFromSupabaseNow();
+    user = state.users.find((item) => String(item.email || "").toLowerCase() === normalizedEmail);
+  }
   if (!user) {
     alert("E-mail não encontrado.");
     return;
@@ -3268,10 +3291,19 @@ function getSupabaseClient() {
   if (supabaseClientInstance !== undefined) return supabaseClientInstance;
   const { url, anonKey, stateId } = getSupabaseConfig();
   supabaseStateId = stateId;
-  const factory = window.supabase?.createClient;
-  if (!url || !anonKey || typeof factory !== "function") {
+  if (!url || !anonKey) {
     supabaseClientInstance = null;
     return null;
+  }
+  const factory = window.supabase?.createClient;
+  if (typeof factory !== "function") {
+    // Fallback sem SDK: usa REST API do Supabase.
+    supabaseClientInstance = { mode: "rest", url: url.replace(/\/+$/, ""), anonKey };
+    if (!hasShownSupabaseConfigWarning) {
+      hasShownSupabaseConfigWarning = true;
+      console.warn("[Originais] SDK Supabase não encontrado; usando fallback REST.");
+    }
+    return supabaseClientInstance;
   }
   try {
     supabaseClientInstance = factory(url, anonKey, {
@@ -3283,6 +3315,43 @@ function getSupabaseClient() {
     supabaseClientInstance = null;
     return null;
   }
+}
+
+async function supabaseRestFetchState(client) {
+  const endpoint = `${client.url}/rest/v1/${SUPABASE_STATE_TABLE}?id=eq.${encodeURIComponent(supabaseStateId)}&select=state&limit=1`;
+  const response = await fetch(endpoint, {
+    method: "GET",
+    headers: {
+      apikey: client.anonKey,
+      Authorization: `Bearer ${client.anonKey}`
+    }
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const rows = await response.json();
+  return Array.isArray(rows) && rows.length ? rows[0] : null;
+}
+
+async function supabaseRestUpsertState(client, stateRaw) {
+  const payload = typeof stateRaw === "string" ? JSON.parse(stateRaw) : stateRaw;
+  const endpoint = `${client.url}/rest/v1/${SUPABASE_STATE_TABLE}?on_conflict=id`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: client.anonKey,
+      Authorization: `Bearer ${client.anonKey}`,
+      Prefer: "resolution=merge-duplicates,return=minimal"
+    },
+    body: JSON.stringify([
+      {
+        id: supabaseStateId,
+        state: payload,
+        updated_at: new Date().toISOString()
+      }
+    ])
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return true;
 }
 
 function mergeUsersByEmail(primaryUsers = [], secondaryUsers = []) {
@@ -3315,14 +3384,20 @@ async function hydrateStateFromSupabase(currentState) {
   if (!client) return currentState;
 
   try {
-    const { data, error } = await client
-      .from(SUPABASE_STATE_TABLE)
-      .select("state")
-      .eq("id", supabaseStateId)
-      .maybeSingle();
-    if (error) {
-      console.warn("[Originais] Falha ao carregar estado do Supabase.", error.message || error);
-      return currentState;
+    let data = null;
+    if (client.mode === "rest") {
+      data = await supabaseRestFetchState(client);
+    } else {
+      const result = await client
+        .from(SUPABASE_STATE_TABLE)
+        .select("state")
+        .eq("id", supabaseStateId)
+        .maybeSingle();
+      if (result.error) {
+        console.warn("[Originais] Falha ao carregar estado do Supabase.", result.error.message || result.error);
+        return currentState;
+      }
+      data = result.data;
     }
     if (!data?.state) return currentState;
     const parsed = typeof data.state === "string" ? JSON.parse(data.state) : data.state;
@@ -3338,6 +3413,10 @@ async function persistStateToSupabase(stateRaw) {
   const client = getSupabaseClient();
   if (!client) return false;
   try {
+    if (client.mode === "rest") {
+      await supabaseRestUpsertState(client, stateRaw);
+      return true;
+    }
     const payload = typeof stateRaw === "string" ? JSON.parse(stateRaw) : stateRaw;
     const { error } = await client.from(SUPABASE_STATE_TABLE).upsert(
       {
