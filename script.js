@@ -133,8 +133,6 @@ async function init() {
 function bindNavigation() {
   document.querySelectorAll(".nav-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".nav-btn").forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
       openTab(btn.dataset.tab);
     });
   });
@@ -145,20 +143,38 @@ function openTab(tab) {
     applyAuthVisibility();
     return;
   }
+  if (tab === "usuarios" && !canViewUsers()) tab = "dashboard";
   currentTab = tab;
   document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
   document.getElementById(tab).classList.add("active");
+  document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab && !b.hidden));
   renderAll();
 }
 
 function bindGlobalActions() {
-  document.getElementById("btnNewProject").addEventListener("click", () => openProjectDialog());
-  document.getElementById("btnQuickNewProject").addEventListener("click", () => openProjectDialog());
+  document.getElementById("btnNewProject").addEventListener("click", () => {
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
+    openProjectDialog();
+  });
+  document.getElementById("btnQuickNewProject").addEventListener("click", () => {
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
+    openProjectDialog();
+  });
 
   document.getElementById("timelineStart").value = state.timeline.start;
   document.getElementById("timelineEnd").value = state.timeline.end;
 
   document.getElementById("applyTimeline").addEventListener("click", () => {
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
     const start = document.getElementById("timelineStart").value;
     const end = document.getElementById("timelineEnd").value;
     if (!start || !end || monthToIndex(start) > monthToIndex(end)) {
@@ -177,16 +193,38 @@ function bindGlobalActions() {
   document.getElementById("timelineRight").addEventListener("click", () => panTimeline(1));
 
   document.getElementById("projectSearch").addEventListener("input", renderProjectsTable);
-  document.getElementById("btnCreateUser").addEventListener("click", () => openUserDialog());
-  document.getElementById("btnInviteUser").addEventListener("click", () => openInviteDialog());
+  document.getElementById("btnCreateUser").addEventListener("click", () => {
+    if (!canManageUsers()) {
+      alert("Apenas ADMIN pode gerir usuários.");
+      return;
+    }
+    openUserDialog();
+  });
+  document.getElementById("btnInviteUser").addEventListener("click", () => {
+    if (!canManageUsers()) {
+      alert("Apenas ADMIN pode gerir usuários.");
+      return;
+    }
+    openInviteDialog();
+  });
 
   document.getElementById("btnImportCsv").addEventListener("click", () => {
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
     document.getElementById("csvInput").click();
   });
 
   document.getElementById("csvInput").addEventListener("change", importCsvFile);
 
-  document.getElementById("btnAddConfig").addEventListener("click", addConfigItem);
+  document.getElementById("btnAddConfig").addEventListener("click", () => {
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
+    addConfigItem();
+  });
   document.getElementById("dashboardFiltersToggle").addEventListener("click", () => {
     dashboardFiltersOpen = !dashboardFiltersOpen;
     renderDashboard();
@@ -289,6 +327,25 @@ function isAuthenticated() {
   return Boolean(getCurrentUser());
 }
 
+function getCurrentUserRole() {
+  const user = getCurrentUser();
+  return String(user?.role || "").toUpperCase();
+}
+
+function canManageUsers() {
+  return getCurrentUserRole() === "ADMIN";
+}
+
+function canEditContent() {
+  const role = getCurrentUserRole();
+  return role === "ADMIN" || role === "EDITOR";
+}
+
+function canViewUsers() {
+  const role = getCurrentUserRole();
+  return role === "ADMIN" || role === "EDITOR";
+}
+
 function persistSessionUser() {
   try {
     if (currentUserId) sessionStorage.setItem(SESSION_USER_KEY, currentUserId);
@@ -312,11 +369,49 @@ function applyAuthVisibility() {
   const profileMenuList = document.getElementById("profileMenuList");
   const profileMenuUser = document.getElementById("profileMenuUser");
   const user = getCurrentUser();
+  const isAdmin = canManageUsers();
+  const canEdit = canEditContent();
+  const canSeeUsers = canViewUsers();
 
   loginView.hidden = Boolean(user);
   appShell.hidden = !user;
   profileMenuList.hidden = true;
   profileMenuUser.textContent = user ? `${user.name || "Usuário"} • ${user.role || "LEITOR"}` : "";
+  const btnCreateUser = document.getElementById("btnCreateUser");
+  const btnInviteUser = document.getElementById("btnInviteUser");
+  if (btnCreateUser) btnCreateUser.hidden = !isAdmin;
+  if (btnInviteUser) btnInviteUser.hidden = !isAdmin;
+  const usersNavBtn = document.querySelector('.nav-btn[data-tab="usuarios"]');
+  if (usersNavBtn) usersNavBtn.hidden = !canSeeUsers;
+
+  const readOnlyControls = [
+    "btnNewProject",
+    "btnQuickNewProject",
+    "btnImportCsv",
+    "btnAddConfig",
+    "applyTimeline",
+    "timelineBack",
+    "timelineForward",
+    "timelineLeft",
+    "timelineRight"
+  ];
+  readOnlyControls.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.hidden = !canEdit;
+    if ("disabled" in el) el.disabled = !canEdit;
+  });
+  const timelineStart = document.getElementById("timelineStart");
+  const timelineEnd = document.getElementById("timelineEnd");
+  if (timelineStart) timelineStart.disabled = !canEdit;
+  if (timelineEnd) timelineEnd.disabled = !canEdit;
+
+  if (user && currentTab === "usuarios" && !canSeeUsers) currentTab = "dashboard";
+  if (user) {
+    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+    document.getElementById(currentTab)?.classList.add("active");
+    document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === currentTab && !b.hidden));
+  }
 }
 
 function logoutCurrentUser() {
@@ -473,6 +568,10 @@ function bindDialog() {
   document.getElementById("btnCancelDialog").addEventListener("click", () => dialog.close());
 
   document.getElementById("btnDeleteProject").addEventListener("click", () => {
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
     const id = document.getElementById("projectId").value;
     if (!id) return;
     if (!confirm("Excluir projeto?")) return;
@@ -483,6 +582,10 @@ function bindDialog() {
   });
 
   document.getElementById("btnAddStage").addEventListener("click", () => {
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
     document.getElementById("projectStages").appendChild(buildStageRow());
   });
 
@@ -540,6 +643,10 @@ function bindDialog() {
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
     const project = collectProjectForm();
     if (!project) return;
     const idx = state.projects.findIndex((p) => p.id === project.id);
@@ -552,6 +659,10 @@ function bindDialog() {
 
   document.getElementById("stageCancelBtn").addEventListener("click", () => stageDialog.close());
   document.getElementById("stageDeleteBtn").addEventListener("click", () => {
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
     const projectId = document.getElementById("stageProjectId").value;
     const stageId = document.getElementById("stageId").value;
     if (!projectId || !stageId) return;
@@ -565,6 +676,10 @@ function bindDialog() {
 
   stageForm.addEventListener("submit", (e) => {
     e.preventDefault();
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
     const projectId = document.getElementById("stageProjectId").value;
     const stageId = document.getElementById("stageId").value;
     const stageTypeId = document.getElementById("stageTypeSelect").value;
@@ -598,6 +713,10 @@ function bindDialog() {
   document.getElementById("configItemCancelBtn").addEventListener("click", () => configItemDialog.close());
   configItemForm.addEventListener("submit", (e) => {
     e.preventDefault();
+    if (!canEditContent()) {
+      alert("Perfil LEITOR possui apenas visualização.");
+      return;
+    }
     saveConfigItemDialog();
     configItemDialog.close();
   });
@@ -621,6 +740,11 @@ function bindDialog() {
   document.getElementById("inviteCancelBtn").addEventListener("click", () => inviteDialog.close());
   inviteForm.addEventListener("submit", (e) => {
     e.preventDefault();
+    if (!canManageUsers()) {
+      alert("Apenas ADMIN pode gerir usuários.");
+      inviteDialog.close();
+      return;
+    }
     const payload = collectInviteForm();
     if (!payload) return;
     const inviteLink = buildUserInviteLink(payload.email, payload.role);
@@ -960,6 +1084,7 @@ function getProjectYearLabel(project) {
 }
 
 function renderGantt() {
+  const editable = canEditContent();
   renderGanttYearChips();
   renderGanttExtraFilters();
   normalizeTimelineWindow();
@@ -994,11 +1119,15 @@ function renderGantt() {
   list.forEach((project) => {
     html += `<div class="gantt-row" style="grid-template-columns:${leftWidth}px ${timelineWidth}px">`;
     html += `<div class="g-left">
-      <button class="g-open" data-open-project="${project.id}">
+      ${
+        editable
+          ? `<button class="g-open" data-open-project="${project.id}">`
+          : '<span class="g-open g-open-readonly">'
+      }
         <span class="g-code">${escapeHtml(project.code || "")}</span>
         <span class="g-title">${escapeHtml(project.title)}</span>
-      </button>
-      <button class="g-add-stage" data-add-stage="${project.id}" title="Adicionar etapa">+</button>
+      ${editable ? "</button>" : "</span>"}
+      ${editable ? `<button class="g-add-stage" data-add-stage="${project.id}" title="Adicionar etapa">+</button>` : ""}
     </div>`;
 
     html += `<div class="g-line" data-line-project="${project.id}">`;
@@ -1040,6 +1169,8 @@ function renderGantt() {
 
   html += "</div>";
   container.innerHTML = html;
+
+  if (!editable) return;
 
   container.querySelectorAll("[data-open-project]").forEach((el) => {
     el.addEventListener("click", () => openProjectDialog(el.dataset.openProject));
@@ -1170,6 +1301,10 @@ function filteredGanttProjects() {
 }
 
 function openStageDialog(projectId, stageId = null, forcedStart = null) {
+  if (!canEditContent()) {
+    alert("Perfil LEITOR possui apenas visualização.");
+    return;
+  }
   const project = state.projects.find((p) => p.id === projectId);
   if (!project) return;
   const stage = stageId ? project.stages.find((s) => s.id === stageId) : null;
@@ -1193,6 +1328,7 @@ function openStageDialog(projectId, stageId = null, forcedStart = null) {
 }
 
 function startStageDrag(event, bar, mode) {
+  if (!canEditContent()) return;
   event.preventDefault();
   const projectId = bar.dataset.project;
   const stageId = bar.dataset.stage;
@@ -1246,6 +1382,7 @@ function onStageDragEnd() {
 }
 
 function startReleaseDrag(event, bar) {
+  if (!canEditContent()) return;
   event.preventDefault();
   const projectId = bar.dataset.releaseProject;
   const project = state.projects.find((p) => p.id === projectId);
@@ -1293,6 +1430,10 @@ function onReleaseDragEnd() {
 }
 
 function openReleaseDateEditor(projectId) {
+  if (!canEditContent()) {
+    alert("Perfil LEITOR possui apenas visualização.");
+    return;
+  }
   const project = state.projects.find((p) => p.id === projectId);
   if (!project) return;
   const normalized = normalizeDateInput(project.releaseDate || "");
@@ -1364,6 +1505,7 @@ function removeStageGhost(line) {
 }
 
 function zoomTimeline(delta) {
+  if (!canEditContent()) return;
   normalizeTimelineWindow();
   const current = getTimelineMonthsShown();
   const next = Math.max(6, Math.min(72, current + delta));
@@ -1384,6 +1526,7 @@ function increaseTimelineWindow() {
 }
 
 function panTimeline(delta) {
+  if (!canEditContent()) return;
   normalizeTimelineWindow();
   state.timeline.start = addMonths(state.timeline.start, delta);
   state.timeline.end = addMonths(state.timeline.end, delta);
@@ -1466,6 +1609,7 @@ function renderProjectsTools() {
 }
 
 function renderProjectsTable() {
+  const editable = canEditContent();
   const query = document.getElementById("projectSearch").value.trim().toLowerCase();
 
   const projects = sortedProjects(state.projects, "desc").filter((p) => {
@@ -1500,45 +1644,63 @@ function renderProjectsTable() {
       const releaseDateIso = normalizeDateInput(p.releaseDate || "");
       const releaseDateLabel = releaseDateIso ? formatDatePtBr(releaseDateIso) : "";
       return `<tr>
-        <td><button class="btn light cell-link-edit" data-action="edit" data-id="${p.id}">${escapeHtml(p.code || "")}</button></td>
+        <td>${editable ? `<button class="btn light cell-link-edit" data-action="edit" data-id="${p.id}">${escapeHtml(p.code || "")}</button>` : `<span>${escapeHtml(p.code || "")}</span>`}</td>
         <td>
-          <button class="btn light cell-link-edit project-title-link" data-action="edit" data-id="${p.id}">
+          ${
+            editable
+              ? `<button class="btn light cell-link-edit project-title-link" data-action="edit" data-id="${p.id}">`
+              : '<span class="project-title-link">'
+          }
             <span class="project-title-main">${escapeHtml(p.title || "")}</span>
             ${yearLabel ? `<span class="project-title-meta-year">${escapeHtml(yearLabel)}</span>` : ""}
-          </button>
+          ${editable ? "</button>" : "</span>"}
         </td>
-        <td>${inlineSelect("category", p.id, getProjectField(p, "category"), categories)}</td>
-        <td>${inlineSelect("format", p.id, getProjectField(p, "format"), formats)}</td>
-        <td>${inlineSelect("nature", p.id, getProjectField(p, "nature"), natures)}</td>
-        <td>${inlineSelect("duration", p.id, getProjectField(p, "duration"), durations)}</td>
-        <td><input class="cell-inline-input" data-action="inline-budget" data-id="${p.id}" type="text" inputmode="decimal" value="${escapeHtml(
-          formatCurrencyInputBRL(budgetValue)
-        )}" placeholder="R$ 0,00" /></td>
+        <td>${editable ? inlineSelect("category", p.id, getProjectField(p, "category"), categories) : escapeHtml(getProjectField(p, "category") || "—")}</td>
+        <td>${editable ? inlineSelect("format", p.id, getProjectField(p, "format"), formats) : escapeHtml(getProjectField(p, "format") || "—")}</td>
+        <td>${editable ? inlineSelect("nature", p.id, getProjectField(p, "nature"), natures) : escapeHtml(getProjectField(p, "nature") || "—")}</td>
+        <td>${editable ? inlineSelect("duration", p.id, getProjectField(p, "duration"), durations) : escapeHtml(getProjectField(p, "duration") || "—")}</td>
+        <td>${
+          editable
+            ? `<input class="cell-inline-input" data-action="inline-budget" data-id="${p.id}" type="text" inputmode="decimal" value="${escapeHtml(
+                formatCurrencyInputBRL(budgetValue)
+              )}" placeholder="R$ 0,00" />`
+            : escapeHtml(formatCurrencyInputBRL(budgetValue) || "—")
+        }</td>
         <td>
-          <div class="release-inline-wrap">
+          ${
+            editable
+              ? `<div class="release-inline-wrap">
             <input class="cell-inline-input release-inline-text${releaseDateIso ? " is-filled" : ""}" data-action="inline-release-date-text" data-id="${p.id}" type="text" inputmode="numeric" placeholder="dd/mm/aaaa" value="${escapeHtml(
-              releaseDateLabel
-            )}" />
+                releaseDateLabel
+              )}" />
             <button type="button" class="btn light release-inline-btn" data-action="inline-release-date-open" title="Selecionar data" aria-label="Selecionar data">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h2v2h6V2h2v2h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3V2zm13 8H4v8h16v-8zM4 8h16V6H4v2z"/></svg>
             </button>
             <input class="release-inline-picker" data-action="inline-release-date-picker" data-id="${p.id}" type="date" lang="pt-BR" value="${escapeHtml(
               releaseDateIso
             )}" />
-          </div>
+          </div>`
+              : `<span class="${releaseDateIso ? "release-inline-text is-filled" : "release-inline-text"}">${escapeHtml(releaseDateLabel || "dd/mm/aaaa")}</span>`
+          }
         </td>
-        <td>${inlineSelect("status", p.id, getProjectField(p, "status"), statuses, badgeClass)}</td>
+        <td>${editable ? inlineSelect("status", p.id, getProjectField(p, "status"), statuses, badgeClass) : escapeHtml(getProjectField(p, "status") || "—")}</td>
         <td>
-          <button class="btn light icon-btn" data-action="edit" data-id="${p.id}" title="Editar projeto" aria-label="Editar projeto">
+          ${
+            editable
+              ? `<button class="btn light icon-btn" data-action="edit" data-id="${p.id}" title="Editar projeto" aria-label="Editar projeto">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25zm2.92 2.33H5v-.92l9.06-9.06.92.92L5.92 19.58zM20.71 7.04a1 1 0 0 0 0-1.41L18.37 3.3a1 1 0 0 0-1.41 0l-1.54 1.54 3.75 3.75 1.54-1.55z"/></svg>
           </button>
           <button class="btn danger icon-btn" data-action="del" data-id="${p.id}" title="Excluir projeto" aria-label="Excluir projeto">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9zm-1 12h12a2 2 0 0 0 2-2V8H4v11a2 2 0 0 0 2 2z"/></svg>
-          </button>
+          </button>`
+              : '<span style="color:#94a3b8">—</span>'
+          }
         </td>
       </tr>`;
     })
     .join("");
+
+  if (!editable) return;
 
   body.querySelectorAll("button[data-action='edit']").forEach((btn) => {
     btn.addEventListener("click", () => openProjectDialog(btn.dataset.id));
@@ -1647,6 +1809,7 @@ function renderProjectsTable() {
 function renderUsers() {
   const body = document.getElementById("usersTableBody");
   if (!body) return;
+  const allowManage = canManageUsers();
 
   const users = [...(state.users || [])].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR"));
   if (!users.length) {
@@ -1666,12 +1829,16 @@ function renderUsers() {
         <td>${escapeHtml(passwordState)}</td>
         <td>${escapeHtml(inviteText)}</td>
         <td>
-          <button class="btn light icon-btn" data-user-action="edit" data-id="${user.id}" title="Editar usuário" aria-label="Editar usuário">
+          ${
+            allowManage
+              ? `<button class="btn light icon-btn" data-user-action="edit" data-id="${user.id}" title="Editar usuário" aria-label="Editar usuário">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25zm2.92 2.33H5v-.92l9.06-9.06.92.92L5.92 19.58zM20.71 7.04a1 1 0 0 0 0-1.41L18.37 3.3a1 1 0 0 0-1.41 0l-1.54 1.54 3.75 3.75 1.54-1.55z"/></svg>
           </button>
           <button class="btn danger icon-btn" data-user-action="del" data-id="${user.id}" title="Excluir usuário" aria-label="Excluir usuário">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9zm-1 12h12a2 2 0 0 0 2-2V8H4v11a2 2 0 0 0 2 2z"/></svg>
-          </button>
+          </button>`
+              : '<span style="color:#94a3b8">—</span>'
+          }
         </td>
       </tr>`;
     })
@@ -1683,6 +1850,10 @@ function renderUsers() {
 
   body.querySelectorAll("button[data-user-action='del']").forEach((btn) => {
     btn.addEventListener("click", () => {
+      if (!canManageUsers()) {
+        alert("Apenas ADMIN pode gerir usuários.");
+        return;
+      }
       if (!confirm("Excluir usuário?")) return;
       state.users = state.users.filter((user) => user.id !== btn.dataset.id);
       saveState();
@@ -1693,12 +1864,25 @@ function renderUsers() {
 
 function openUserDialog(userId = null) {
   const dialog = document.getElementById("userDialog");
+  const current = getCurrentUser();
+  const isAdmin = canManageUsers();
+  if (!isAdmin) {
+    if (!current) return;
+    if (!userId || userId !== current.id) {
+      alert("Apenas ADMIN pode gerir usuários.");
+      return;
+    }
+  }
   const user = state.users.find((item) => item.id === userId);
-  document.getElementById("userDialogTitle").textContent = user ? "Editar Usuário" : "Cadastrar Usuário";
+  document.getElementById("userDialogTitle").textContent = user ? (isAdmin ? "Editar Usuário" : "Editar Perfil") : "Cadastrar Usuário";
   document.getElementById("userId").value = user?.id || uid();
   document.getElementById("userName").value = user?.name || "";
   document.getElementById("userEmail").value = user?.email || "";
-  document.getElementById("userRole").value = user?.role || "LEITOR";
+  const roleSelect = document.getElementById("userRole");
+  roleSelect.value = user?.role || "LEITOR";
+  roleSelect.disabled = !isAdmin;
+  const roleLabel = roleSelect.closest("label");
+  if (roleLabel) roleLabel.hidden = !isAdmin;
   document.getElementById("userPassword").value = "";
   document.getElementById("userPasswordConfirm").value = "";
   document.getElementById("userPasswordHint").hidden = !user;
@@ -1708,6 +1892,14 @@ function openUserDialog(userId = null) {
 function collectUserForm() {
   const id = document.getElementById("userId").value;
   const existing = state.users.find((user) => user.id === id);
+  const current = getCurrentUser();
+  const isAdmin = canManageUsers();
+  if (!isAdmin) {
+    if (!current || id !== current.id) {
+      alert("Apenas ADMIN pode gerir usuários.");
+      return null;
+    }
+  }
   const name = document.getElementById("userName").value.trim();
   const email = document.getElementById("userEmail").value.trim().toLowerCase();
   const role = document.getElementById("userRole").value;
@@ -1741,7 +1933,7 @@ function collectUserForm() {
     id,
     name,
     email,
-    role: ["ADMIN", "EDITOR", "LEITOR"].includes(role) ? role : "LEITOR",
+    role: isAdmin ? (["ADMIN", "EDITOR", "LEITOR"].includes(role) ? role : "LEITOR") : String(existing?.role || current?.role || "LEITOR"),
     passwordHash: password ? hashPassword(password) : String(existing?.passwordHash || ""),
     invitedAt: existing?.invitedAt || new Date().toISOString().slice(0, 10),
     firstAccessPending: password ? false : Boolean(existing?.firstAccessPending)
@@ -1749,6 +1941,10 @@ function collectUserForm() {
 }
 
 function openInviteDialog() {
+  if (!canManageUsers()) {
+    alert("Apenas ADMIN pode gerir usuários.");
+    return;
+  }
   document.getElementById("inviteEmail").value = "";
   document.getElementById("inviteRole").value = "LEITOR";
   document.getElementById("inviteDialog").showModal();
@@ -1794,6 +1990,10 @@ function buildUserInviteLink(email, role) {
 }
 
 function openProjectDialog(projectId = null) {
+  if (!canEditContent()) {
+    alert("Perfil LEITOR possui apenas visualização.");
+    return;
+  }
   const project = state.projects.find((p) => p.id === projectId);
   const dialog = document.getElementById("projectDialog");
 
@@ -1837,6 +2037,7 @@ function openProjectDialog(projectId = null) {
 }
 
 function collectProjectForm() {
+  if (!canEditContent()) return null;
   const projectId = document.getElementById("projectId").value;
   const existingProject = state.projects.find((project) => project.id === projectId);
   const rawBudget = document.getElementById("projectBudget").value.trim();
@@ -1933,6 +2134,7 @@ function renderConfigTabs() {
 }
 
 function renderConfigList() {
+  const editable = canEditContent();
   document.getElementById("configTitle").textContent = CONFIG_META[selectedConfigKey];
   const list = document.getElementById("configList");
 
@@ -1941,13 +2143,17 @@ function renderConfigList() {
       .map(
         (item, index) => `<li class="config-item" data-config-index="${index}" data-config-id="${item.id}">
       <span class="config-item-main">
-        <button type="button" class="btn light config-drag-btn" draggable="true" title="Arrastar para ordenar" aria-label="Arrastar para ordenar">⋮⋮</button>
+        ${editable ? '<button type="button" class="btn light config-drag-btn" draggable="true" title="Arrastar para ordenar" aria-label="Arrastar para ordenar">⋮⋮</button>' : ""}
         <span class="config-item-label">${escapeHtml(item.name)}</span>
       </span>
       <span class="actions">
-        <input class="config-color-input" type="color" value="${item.color}" data-action="color" data-id="${item.id}" />
+        ${
+          editable
+            ? `<input class="config-color-input" type="color" value="${item.color}" data-action="color" data-id="${item.id}" />
         <button class="btn light" data-action="edit" data-id="${item.id}">Editar</button>
-        <button class="btn danger" data-action="del" data-id="${item.id}">Excluir</button>
+        <button class="btn danger" data-action="del" data-id="${item.id}">Excluir</button>`
+            : ""
+        }
       </span>
     </li>`
       )
@@ -1959,17 +2165,21 @@ function renderConfigList() {
       .map(
         (item, i) => `<li class="config-item" data-config-index="${i}" data-config-id="${i}">
       <span class="config-item-main">
-        <button type="button" class="btn light config-drag-btn" draggable="true" title="Arrastar para ordenar" aria-label="Arrastar para ordenar">⋮⋮</button>
+        ${editable ? '<button type="button" class="btn light config-drag-btn" draggable="true" title="Arrastar para ordenar" aria-label="Arrastar para ordenar">⋮⋮</button>' : ""}
         <span class="config-item-label">${escapeHtml(item)}</span>
       </span>
       <span class="actions">
         ${
-          hasColor
-            ? `<input class="config-color-input" type="color" value="${getConfigItemColor(selectedConfigKey, item, i)}" data-action="item-color" data-id="${i}" />`
+          editable
+            ? `${
+                hasColor
+                  ? `<input class="config-color-input" type="color" value="${getConfigItemColor(selectedConfigKey, item, i)}" data-action="item-color" data-id="${i}" />`
+                  : ""
+              }
+        <button class="btn light" data-action="edit" data-id="${i}">Editar</button>
+        <button class="btn danger" data-action="del" data-id="${i}">Excluir</button>`
             : ""
         }
-        <button class="btn light" data-action="edit" data-id="${i}">Editar</button>
-        <button class="btn danger" data-action="del" data-id="${i}">Excluir</button>
       </span>
     </li>`
       )
@@ -1977,6 +2187,8 @@ function renderConfigList() {
   }
 
   if (!list.children.length) list.innerHTML = '<li class="empty">Sem itens.</li>';
+
+  if (!editable) return;
 
   list.querySelectorAll("button[data-action='edit']").forEach((btn) => {
     btn.addEventListener("click", () => editConfigItem(btn.dataset.id));
@@ -2012,6 +2224,10 @@ function renderConfigList() {
 }
 
 function addConfigItem() {
+  if (!canEditContent()) {
+    alert("Perfil LEITOR possui apenas visualização.");
+    return;
+  }
   if (selectedConfigKey === "stages") {
     const name = prompt("Nome da etapa:");
     if (!name || !name.trim()) return;
@@ -2031,10 +2247,18 @@ function addConfigItem() {
 }
 
 function editConfigItem(id) {
+  if (!canEditContent()) {
+    alert("Perfil LEITOR possui apenas visualização.");
+    return;
+  }
   openConfigItemDialog(id);
 }
 
 function deleteConfigItem(id) {
+  if (!canEditContent()) {
+    alert("Perfil LEITOR possui apenas visualização.");
+    return;
+  }
   if (!confirm("Excluir item?")) return;
   if (selectedConfigKey === "stages") {
     state.settings.stages = state.settings.stages.filter((st) => st.id !== id);
@@ -2058,6 +2282,10 @@ function isColorEnabledConfigKey(key) {
 }
 
 function openConfigItemDialog(id) {
+  if (!canEditContent()) {
+    alert("Perfil LEITOR possui apenas visualização.");
+    return;
+  }
   const key = selectedConfigKey;
   const dialog = document.getElementById("configItemDialog");
   const title = document.getElementById("configItemDialogTitle");
@@ -2091,6 +2319,7 @@ function openConfigItemDialog(id) {
 }
 
 function saveConfigItemDialog() {
+  if (!canEditContent()) return;
   const key = document.getElementById("configItemKey").value;
   const id = document.getElementById("configItemId").value;
   const nameInput = document.getElementById("configItemName");
@@ -2123,6 +2352,7 @@ function saveConfigItemDialog() {
 }
 
 function initConfigDragAndDrop(list) {
+  if (!canEditContent()) return;
   let draggedIndex = null;
   const rows = [...list.querySelectorAll(".config-item")];
   rows.forEach((row) => {
@@ -2169,6 +2399,11 @@ function initConfigDragAndDrop(list) {
 }
 
 function importCsvFile(event) {
+  if (!canEditContent()) {
+    alert("Perfil LEITOR possui apenas visualização.");
+    event.target.value = "";
+    return;
+  }
   const files = [...(event.target.files || [])];
   if (!files.length) return;
   readFilesAsText(files).then((fileMap) => {
