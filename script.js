@@ -3319,12 +3319,13 @@ function getSupabaseClient() {
 
 async function supabaseRestFetchState(client) {
   const endpoint = `${client.url}/rest/v1/${SUPABASE_STATE_TABLE}?id=eq.${encodeURIComponent(supabaseStateId)}&select=state&limit=1`;
+  const headers = {
+    apikey: client.anonKey
+  };
+  if (String(client.anonKey || "").includes(".")) headers.Authorization = `Bearer ${client.anonKey}`;
   const response = await fetch(endpoint, {
     method: "GET",
-    headers: {
-      apikey: client.anonKey,
-      Authorization: `Bearer ${client.anonKey}`
-    }
+    headers
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const rows = await response.json();
@@ -3334,14 +3335,15 @@ async function supabaseRestFetchState(client) {
 async function supabaseRestUpsertState(client, stateRaw) {
   const payload = typeof stateRaw === "string" ? JSON.parse(stateRaw) : stateRaw;
   const endpoint = `${client.url}/rest/v1/${SUPABASE_STATE_TABLE}?on_conflict=id`;
+  const headers = {
+    "Content-Type": "application/json",
+    apikey: client.anonKey,
+    Prefer: "resolution=merge-duplicates,return=minimal"
+  };
+  if (String(client.anonKey || "").includes(".")) headers.Authorization = `Bearer ${client.anonKey}`;
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: client.anonKey,
-      Authorization: `Bearer ${client.anonKey}`,
-      Prefer: "resolution=merge-duplicates,return=minimal"
-    },
+    headers,
     body: JSON.stringify([
       {
         id: supabaseStateId,
