@@ -1775,20 +1775,33 @@ function renderProjectsTable() {
     btn.addEventListener("click", () => openProjectDialog(btn.dataset.id));
   });
 
+  const commitInlineSelect = (el) => {
+    if (!el) return;
+    const project = state.projects.find((p) => p.id === el.dataset.id);
+    if (!project) return;
+    const field = String(el.dataset.field || "").trim();
+    const nextValue = String(el.value || "");
+    const fieldMap = {
+      category: "category",
+      format: "format",
+      nature: "nature",
+      duration: "duration",
+      status: "status"
+    };
+    const projectField = fieldMap[field];
+    if (!projectField) return;
+    if (String(project[projectField] || "") === nextValue) return;
+    project[projectField] = nextValue;
+    saveState();
+    renderProjectsTable();
+    renderDashboard();
+    renderGantt();
+  };
+
   body.querySelectorAll("select[data-action='inline-select']").forEach((el) => {
-    el.addEventListener("change", () => {
-      const project = state.projects.find((p) => p.id === el.dataset.id);
-      if (!project) return;
-      const field = el.dataset.field;
-      if (field === "category") project.category = el.value;
-      if (field === "format") project.format = el.value;
-      if (field === "nature") project.nature = el.value;
-      if (field === "duration") project.duration = el.value;
-      if (field === "status") project.status = el.value;
-      saveState();
-      renderProjectsTable();
-      renderDashboard();
-      renderGantt();
+    // Safari pode não disparar "change" de forma consistente em selects inline.
+    ["change", "input"].forEach((eventName) => {
+      el.addEventListener(eventName, () => commitInlineSelect(el));
     });
   });
 
