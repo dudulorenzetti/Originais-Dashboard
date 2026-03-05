@@ -1775,35 +1775,18 @@ function renderProjectsTable() {
     btn.addEventListener("click", () => openProjectDialog(btn.dataset.id));
   });
 
-  const commitInlineSelect = (el) => {
-    if (!el) return;
-    const project = state.projects.find((p) => p.id === el.dataset.id);
-    if (!project) return;
-    const field = String(el.dataset.field || "").trim();
-    const nextValue = String(el.value || "");
-    const fieldMap = {
-      category: "category",
-      format: "format",
-      nature: "nature",
-      duration: "duration",
-      status: "status"
+  if (!body.dataset.inlineSelectDelegated) {
+    body.dataset.inlineSelectDelegated = "1";
+    const handleInlineSelectEvent = (event) => {
+      const select = event.target?.closest?.("select[data-action='inline-select']");
+      if (!select || !body.contains(select)) return;
+      // Safari pode atualizar o valor do <select> no fim do ciclo do evento.
+      setTimeout(() => commitProjectInlineSelect(select), 0);
     };
-    const projectField = fieldMap[field];
-    if (!projectField) return;
-    if (String(project[projectField] || "") === nextValue) return;
-    project[projectField] = nextValue;
-    saveState();
-    renderProjectsTable();
-    renderDashboard();
-    renderGantt();
-  };
-
-  body.querySelectorAll("select[data-action='inline-select']").forEach((el) => {
-    // Safari pode não disparar "change" de forma consistente em selects inline.
-    ["change", "input"].forEach((eventName) => {
-      el.addEventListener(eventName, () => commitInlineSelect(el));
+    ["change", "input", "blur"].forEach((eventName) => {
+      body.addEventListener(eventName, handleInlineSelectEvent, true);
     });
-  });
+  }
 
   body.querySelectorAll("input[data-action='inline-budget']").forEach((el) => {
     el.addEventListener("change", () => {
@@ -1942,6 +1925,29 @@ function renderUsers() {
       renderAll();
     });
   });
+}
+
+function commitProjectInlineSelect(el) {
+  if (!el) return;
+  const project = state.projects.find((p) => p.id === el.dataset.id);
+  if (!project) return;
+  const field = String(el.dataset.field || "").trim();
+  const nextValue = String(el.value || "");
+  const fieldMap = {
+    category: "category",
+    format: "format",
+    nature: "nature",
+    duration: "duration",
+    status: "status"
+  };
+  const projectField = fieldMap[field];
+  if (!projectField) return;
+  if (String(project[projectField] || "") === nextValue) return;
+  project[projectField] = nextValue;
+  saveState();
+  renderProjectsTable();
+  renderDashboard();
+  renderGantt();
 }
 
 function openUserDialog(userId = null) {

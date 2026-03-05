@@ -1282,6 +1282,12 @@ tbody tr:hover {
   font-size: 0.75rem;
 }
 
+.cell-inline-select {
+  cursor: pointer;
+  -webkit-appearance: menulist;
+  appearance: menulist;
+}
+
 .projects-table-wrap td:nth-child(7) .cell-inline-input {
   min-width: 104px;
 }
