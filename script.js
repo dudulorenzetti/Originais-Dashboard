@@ -63,6 +63,8 @@ const DEFAULT_ADMIN_PASSWORD = "admin123";
 const DEFAULT_INVITED_PASSWORD = "lumine123";
 const SUPABASE_STATE_TABLE = "app_state";
 const SUPABASE_DEFAULT_STATE_ID = "originais-main";
+const THEME_STORAGE_KEY = "lumine-theme";
+const THEME_VALUES = new Set(["dark", "light", "system"]);
 
 let state = seedState();
 let currentTab = "dashboard";
@@ -112,6 +114,64 @@ let queuedSupabaseStateRaw = "";
 let hasShownSupabaseWarning = false;
 let hasShownSupabaseConfigWarning = false;
 let hasLoggedSupabaseTarget = false;
+let currentThemePreference = "dark";
+let systemThemeMediaQuery = null;
+
+function normalizeThemePreference(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return THEME_VALUES.has(normalized) ? normalized : "dark";
+}
+
+function getStoredThemePreference() {
+  try {
+    return normalizeThemePreference(window.localStorage?.getItem(THEME_STORAGE_KEY) || "dark");
+  } catch (_) {
+    return "dark";
+  }
+}
+
+function getSystemThemeMode() {
+  try {
+    if (window.matchMedia?.("(prefers-color-scheme: dark)").matches) return "dark";
+  } catch (_) {}
+  return "light";
+}
+
+function updateThemeOptionButtons() {
+  document.querySelectorAll("[data-theme-option]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.themeOption === currentThemePreference);
+  });
+}
+
+function applyThemePreference(value, { persist = true } = {}) {
+  currentThemePreference = normalizeThemePreference(value);
+  const resolvedTheme = currentThemePreference === "system" ? getSystemThemeMode() : currentThemePreference;
+  document.documentElement.setAttribute("data-theme", resolvedTheme);
+  document.documentElement.setAttribute("data-theme-preference", currentThemePreference);
+  updateThemeOptionButtons();
+  if (!persist) return;
+  try {
+    window.localStorage?.setItem(THEME_STORAGE_KEY, currentThemePreference);
+  } catch (_) {}
+}
+
+function bindSystemThemeListener() {
+  try {
+    if (!window.matchMedia) return;
+    if (!systemThemeMediaQuery) systemThemeMediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = () => {
+      if (currentThemePreference !== "system") return;
+      applyThemePreference("system", { persist: false });
+    };
+    if (typeof systemThemeMediaQuery.addEventListener === "function") systemThemeMediaQuery.addEventListener("change", handleChange);
+    else if (typeof systemThemeMediaQuery.addListener === "function") systemThemeMediaQuery.addListener(handleChange);
+  } catch (_) {}
+}
+
+function initTheme() {
+  bindSystemThemeListener();
+  applyThemePreference(getStoredThemePreference(), { persist: false });
+}
 
 async function init() {
   state = loadState();
@@ -301,6 +361,12 @@ function bindAuthActions() {
     profileMenuList.hidden = true;
     logoutCurrentUser();
   });
+
+  document.querySelectorAll("[data-theme-option]").forEach((button) => {
+    button.addEventListener("click", () => {
+      applyThemePreference(button.dataset.themeOption || "dark");
+    });
+  });
 }
 
 function authenticateUser(email, password) {
@@ -412,6 +478,7 @@ function applyAuthVisibility() {
     document.getElementById(currentTab)?.classList.add("active");
     document.querySelectorAll(".nav-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === currentTab && !b.hidden));
   }
+  updateThemeOptionButtons();
 }
 
 function logoutCurrentUser() {
@@ -1145,10 +1212,12 @@ function renderGantt() {
       const width = visEnd - visStart + 1;
       const stageDef = state.settings.stages.find((s) => s.id === st.stageId);
       const color = stageDef?.color || "#cbd5e1";
+      const stageLabel = stageDef?.name || st.name || "Etapa";
+      const stageTitle = `${stageLabel}: ${monthHoverLabel(st.start)} - ${monthHoverLabel(st.end)}`;
       const selected = selectedStageRef && selectedStageRef.projectId === project.id && selectedStageRef.stageId === st.id;
 
-      html += `<div class="stage-bar ${selected ? "selected" : ""}" style="left: calc(${visStart} * var(--month-width)); width: calc(${width} * var(--month-width) - 2px); background:${color}" data-project="${project.id}" data-stage="${st.id}">
-        <span class="label">${escapeHtml(stageDef?.name || st.name || "Etapa")}</span>
+      html += `<div class="stage-bar ${selected ? "selected" : ""}" style="left: calc(${visStart} * var(--month-width)); width: calc(${width} * var(--month-width) - 2px); background:${color}" data-project="${project.id}" data-stage="${st.id}" title="${escapeHtml(stageTitle)}">
+        <span class="label">${escapeHtml(stageLabel)}</span>
         <span class="stage-handle left" data-resize="left"></span>
         <span class="stage-handle right" data-resize="right"></span>
       </div>`;
@@ -4064,4 +4133,5 @@ function stageSeed(stageId, start, end) {
   return { id: uid(), stageId, start, end };
 }
 
+initTheme();
 init();
