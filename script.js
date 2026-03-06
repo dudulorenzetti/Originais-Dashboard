@@ -114,19 +114,19 @@ let queuedSupabaseStateRaw = "";
 let hasShownSupabaseWarning = false;
 let hasShownSupabaseConfigWarning = false;
 let hasLoggedSupabaseTarget = false;
-let currentThemePreference = "dark";
+let currentThemePreference = "system";
 let systemThemeMediaQuery = null;
 
 function normalizeThemePreference(value) {
   const normalized = String(value || "").trim().toLowerCase();
-  return THEME_VALUES.has(normalized) ? normalized : "dark";
+  return THEME_VALUES.has(normalized) ? normalized : "system";
 }
 
 function getStoredThemePreference() {
   try {
-    return normalizeThemePreference(window.localStorage?.getItem(THEME_STORAGE_KEY) || "dark");
+    return normalizeThemePreference(window.localStorage?.getItem(THEME_STORAGE_KEY) || "system");
   } catch (_) {
-    return "dark";
+    return "system";
   }
 }
 
@@ -1712,8 +1712,9 @@ function renderProjectsTable() {
       const budgetValue = hasNumericValue(p.budget) ? Number(p.budget) : hasNumericValue(p.spent) ? Number(p.spent) : null;
       const releaseDateIso = normalizeDateInput(p.releaseDate || "");
       const releaseDateLabel = releaseDateIso ? formatDatePtBr(releaseDateIso) : "";
+      const skuLabel = p.code ? `#${p.code}` : "";
       return `<tr>
-        <td>${editable ? `<button class="btn light cell-link-edit" data-action="edit" data-id="${p.id}">${escapeHtml(p.code || "")}</button>` : `<span>${escapeHtml(p.code || "")}</span>`}</td>
+        <td>${editable ? `<button class="btn light cell-link-edit" data-action="edit" data-id="${p.id}">${escapeHtml(skuLabel)}</button>` : `<span>${escapeHtml(skuLabel)}</span>`}</td>
         <td>
           ${
             editable
@@ -1816,7 +1817,10 @@ function renderProjectsTable() {
         renderProjectsTable();
         return;
       }
-      project.releaseDate = normalized || "";
+      const previousReleaseDate = normalizeDateInput(project.releaseDate || "") || "";
+      const nextReleaseDate = normalized || "";
+      if (previousReleaseDate === nextReleaseDate) return;
+      project.releaseDate = nextReleaseDate;
       if (normalized) project.year = Number(normalized.slice(0, 4));
       saveState();
       renderProjectsTable();
@@ -1829,7 +1833,6 @@ function renderProjectsTable() {
     el.addEventListener("input", () => {
       el.value = maskDateTextPtBr(el.value);
       el.classList.toggle("is-filled", Boolean(String(el.value || "").trim()));
-      if (!String(el.value || "").trim()) commitReleaseDate(el.dataset.id, "");
     });
     el.addEventListener("change", () => {
       commitReleaseDate(el.dataset.id, el.value);

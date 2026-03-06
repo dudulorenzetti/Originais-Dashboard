@@ -851,6 +851,11 @@ textarea {
   margin-bottom: 10px;
 }
 
+#projectSearch {
+  width: min(620px, 100%);
+  max-width: 100%;
+}
+
 .projects-top-sticky {
   position: sticky;
   top: 0;
@@ -1260,6 +1265,16 @@ tbody tr:hover {
 
 .project-title-main {
   min-width: 0;
+}
+
+:root[data-theme="dark"] .projects-table-wrap td:nth-child(1),
+:root[data-theme="dark"] .projects-table-wrap td:nth-child(2),
+:root[data-theme="dark"] .projects-table-wrap td:nth-child(1) span,
+:root[data-theme="dark"] .projects-table-wrap td:nth-child(2) span,
+:root[data-theme="dark"] .projects-table-wrap td:nth-child(1) .cell-link-edit,
+:root[data-theme="dark"] .projects-table-wrap td:nth-child(2) .cell-link-edit,
+:root[data-theme="dark"] .projects-table-wrap .project-title-main {
+  color: #f5f7fa;
 }
 
 .project-title-meta-year {
